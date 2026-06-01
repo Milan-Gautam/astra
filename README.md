@@ -16,7 +16,7 @@
 ## Install
 
 ```bash
-curl -O https://raw.githubusercontent.com/yourrepo/astra/main/astra.py
+curl -O https://raw.githubusercontent.com/Milan-Gautam/astra/main/astra.py
 chmod +x astra.py
 ```
 
