@@ -115,9 +115,6 @@ python3 astra.py --list
 
 ---
 
-## False positive design
+## 🥟 Buy Me a Momo
 
-- **Quoted values only** for generic patterns (`api_key`, `password`, `secret`) — variable references don't fire
-- **Entropy threshold** per pattern — low-entropy strings dropped silently
-- **Placeholder filter** — `${TOKEN}`, `{{key}}`, `changeme`, `your_key`, `<insert here>` all suppressed
-- Exit `0` = clean · Exit `1` = findings found
+Love **astra**? Treat me to some momos → [Click here to donate](https://buymemomo.com/milang)
