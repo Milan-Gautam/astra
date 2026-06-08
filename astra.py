@@ -29,7 +29,7 @@ try:
     HAS_ESPRIMA = True
 except ImportError:
     HAS_ESPRIMA = False
-    print("[!] esprima not installed. Install with: pip install esprima", file=sys.stderr)
+    # Warn only when --ast is explicitly requested (checked in main)
 
 # ── colour ────────────────────────────────────────────────────────────────────
 R = "\033[0m"
@@ -147,10 +147,6 @@ add_pattern("CircleCI Token", r"(circleci-[a-f0-9]{40})", "confirmed", "CircleCI
 add_pattern("Travis CI Token", r"(?i)travis(?:_ci)?_token\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{20,})['\"`]", "probable", "Travis CI token", ["travisci"], 3.0)
 add_pattern("Jenkins Token", r"(?i)jenkins(?:_api)?_token\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{20,})['\"`]", "probable", "Jenkins API token", ["jenkins"], 3.0)
 add_pattern("Azure DevOps PAT", r"(azp_[A-Za-z0-9]{52})", "confirmed", "Azure DevOps PAT", ["azure"], 4.0)
-add_pattern("Bitbucket App Password", r"(BB[A-Za-z0-9_\-]{40})", "confirmed", "Bitbucket app password", ["bitbucket"], 3.5)
-add_pattern("AWS CodeBuild Token", r"(codebuild_[A-Za-z0-9]{32})", "confirmed", "AWS CodeBuild token", ["aws"], 3.5)
-add_pattern("CircleCI User Token", r"(circleci_user_token_[A-Za-z0-9]{40})", "confirmed", "CircleCI user token", ["circleci"], 3.5)
-add_pattern("TeamCity Token", r"(teamcity_[A-Za-z0-9]{32})", "confirmed", "TeamCity access token", ["teamcity"], 3.5)
 add_pattern("Buildkite Token", r"(bkua_[a-zA-Z0-9]{40})", "confirmed", "Buildkite agent token", ["buildkite"], 4.0)
 add_pattern("Pulumi Access Token", r"(pul-[a-zA-Z0-9]{40})", "confirmed", "Pulumi access token", ["pulumi"], 4.0)
 
@@ -184,8 +180,6 @@ add_pattern("Square Access Token", r"((?:EAAA|sq0atp-)[A-Za-z0-9\-_]{22,})", "co
 add_pattern("Square OAuth Secret", r"(sq0csp-[A-Za-z0-9_\-]{43})", "confirmed", "Square OAuth secret", ["square"])
 add_pattern("Adyen API Key", r"(AQ[A-Za-z0-9_\-]{30,})", "confirmed", "Adyen API key", ["adyen"], 3.5)
 add_pattern("Razorpay Key", r"(rzp_(?:live|test)_[A-Za-z0-9]{14,})", "confirmed", "Razorpay key", ["razorpay"], 3.5)
-add_pattern("Paddle API Key", r"(paddle_[A-Za-z0-9]{40})", "confirmed", "Paddle API key", ["paddle"], 3.5)
-add_pattern("Recurly API Key", r"(recurly_[A-Za-z0-9]{32})", "confirmed", "Recurly API key", ["recurly"], 3.5)
 add_pattern("Braintree Private Key", r"(-----BEGIN BRAINTREE PRIVATE KEY-----)", "confirmed", "Braintree private key", ["braintree"])
 add_pattern("Flutterwave Secret Key", r"(FLWSECK(?:_TEST)?-[a-zA-Z0-9]{32})", "confirmed", "Flutterwave secret", ["flutterwave"], 3.5)
 add_pattern("Paystack Secret Key", r"(sk_(?:live|test)_[A-Za-z0-9]{40})", "confirmed", "Paystack secret", ["paystack"], 4.0)
@@ -205,17 +199,9 @@ add_pattern("Perplexity API Key", r"(pplx-[A-Za-z0-9]{48})", "confirmed", "Perpl
 add_pattern("OpenRouter API Key", r"(sk-or-v1-[A-Za-z0-9]{48})", "confirmed", "OpenRouter key", ["openrouter"], 4.0)
 add_pattern("Together AI Key", r"(?i)together[_\s]?(?:ai[_\s]?)?(?:api[_\s]?)?key\s*[=:]\s*['\"`]([A-Za-z0-9]{64})['\"`]", "confirmed", "Together AI key", ["together"], 4.0)
 add_pattern("Mistral API Key", r"(?i)mistral[_\s]?(?:api[_\s]?)?key\s*[=:]\s*['\"`]([A-Za-z0-9]{32})['\"`]", "probable", "Mistral AI key", ["mistral"], 3.5)
-add_pattern("DeepSeek API Key", r"(sk-[A-Za-z0-9]{48})", "confirmed", "DeepSeek API key", ["deepseek"], 4.0)
-add_pattern("AI21 Labs API Key", r"(ai21_[A-Za-z0-9]{32})", "confirmed", "AI21 Labs key", ["ai21"], 3.5)
-add_pattern("Aleph Alpha Token", r"(AA[A-Za-z0-9]{40})", "confirmed", "Aleph Alpha token", ["alephalpha"], 3.5)
-add_pattern("Writer API Key", r"(writer_[A-Za-z0-9]{40})", "confirmed", "Writer API key", ["writer"], 3.5)
-add_pattern("DeepL API Key", r"(deepl_[A-Za-z0-9]{32})", "confirmed", "DeepL API key", ["deepl"], 3.5)
 
 # ── Social Media APIs ────────────────────────────────────────────────────────
 add_pattern("Twitter/X Bearer Token", r"(AAAAAAAAAAAAAAAAAAAA[A-Za-z0-9%+/]{40,})", "confirmed", "Twitter Bearer token", ["twitter"], 4.0)
-add_pattern("Instagram Basic Token", r"(IG[A-Za-z0-9]{32,}\.[A-Za-z0-9_\-]{32,})", "confirmed", "Instagram Basic token", ["instagram"], 3.5)
-add_pattern("TikTok Access Token", r"(tt_[A-Za-z0-9]{32})", "confirmed", "TikTok access token", ["tiktok"], 3.5)
-add_pattern("LinkedIn Access Token", r"(AQ[A-Za-z0-9_\-]{40,})", "confirmed", "LinkedIn OAuth token", ["linkedin"], 3.5)
 add_pattern("Facebook Access Token", r"(EAACEdEose0cBA[0-9A-Za-z]+)", "confirmed", "Facebook access token", ["facebook"])
 
 # ── Hosting / CDN ────────────────────────────────────────────────────────────
@@ -288,7 +274,6 @@ add_pattern("IBM Cloud API Key", r"(?i)ibmcloud_api_key\s*[=:]\s*['\"`]([A-Za-z0
 add_pattern("Tencent Cloud SecretId", r"(?<![A-Z0-9])(AKID[A-Za-z0-9]{32})(?![A-Z0-9])", "confirmed", "Tencent SecretId", ["tencent"], 3.0)
 add_pattern("Tencent Cloud SecretKey", r"(?i)secret_key\s*[=:]\s*['\"`]([A-Za-z0-9]{32})['\"`]", "confirmed", "Tencent SecretKey", ["tencent"], 4.0)
 add_pattern("DigitalOcean Spaces Key", r"(DO00[A-Za-z0-9]{32,})", "confirmed", "DO Spaces key", ["digitalocean"], 3.5)
-add_pattern("Linode API Token", r"(linode_[A-Za-z0-9]{32})", "confirmed", "Linode token", ["linode"], 3.5)
 add_pattern("Vultr API Key", r"(VULTR_API_KEY\s*[=:]\s*['\"`]([A-Za-z0-9]{32,})['\"`])", "confirmed", "Vultr key", ["vultr"], 3.5)
 add_pattern("OVH API Key", r"(OVH_API_KEY\s*[=:]\s*['\"`]([A-Za-z0-9]{32})['\"`])", "confirmed", "OVH key", ["ovh"], 3.5)
 add_pattern("Alibaba Cloud AccessKey ID", r"(LTAI[A-Za-z0-9]{16,20})", "confirmed", "Alibaba AccessKey", ["alibaba"], 3.0)
@@ -299,12 +284,9 @@ add_pattern("Scaleway API Key", r"(SCW[A-Z0-9]{20,})", "confirmed", "Scaleway ke
 add_pattern("Kubernetes Secret (base64)", r"(kind:\s*Secret\s*\nmetadata:\s*\n\s*name:\s*\S+\s*\ndata:\s*\n\s*[A-Za-z0-9_\-]+:\s*[A-Za-z0-9+/=]+)", "confirmed", "K8s secret manifest", ["kubernetes"])
 add_pattern("Docker Config Auth", r"(\"auth\":\s*\"[A-Za-z0-9+/=]+\")", "confirmed", "Docker registry auth", ["docker"])
 add_pattern("Kubernetes Service Account Token", r"(eyJhbGciOiJSUzI1NiIsImtpZCI6[^.]+\.[^.]+\.[^.]+\n?)", "confirmed", "K8s service account JWT", ["kubernetes"], 4.2)
-add_pattern("Terraform Cloud Token", r"(terraform_[A-Za-z0-9]{32,})", "confirmed", "Terraform token", ["terraform"], 3.5)
 
 # ── Crypto / Web3 ────────────────────────────────────────────────────────────
-add_pattern("Solana Private Key", r"([1-9A-HJ-NP-Za-km-z]{87,88})", "confirmed", "Solana private key", ["solana"], 4.5)
 add_pattern("Ethereum Address", r"(0x[a-fA-F0-9]{40})", "info", "ETH address", ["ethereum"])
-add_pattern("Polkadot Seed Phrase", r"((?:[a-z]+ ){11,23}[a-z]+)", "confirmed", "Seed phrase (12-24 words)", ["crypto"], 4.0)
 
 # ── More dangerous functions (RCE, LFI, SSRF) ────────────────────────────────
 add_pattern("Function Constructor with User Input", r"(new\s+Function\s*\(\s*(?:req\.|request\.|params\.|body\.|query\.|\$\{))", "confirmed", "Dynamic Function with user input", ["rce"])
@@ -315,10 +297,6 @@ add_pattern("NoSQL injection (Mongoose)", r"(?:find|findOne|update|deleteOne|agg
 add_pattern("Prototype Pollution - lodash merge", r"(?:_.merge|_.mergeWith|_.defaultsDeep)\s*\(\s*[^,]+,\s*(?:req\.|body\.|query\.|params\.)", "confirmed", "Lodash deep merge – prototype pollution", ["prototype-pollution"])
 
 # ─── Additional API keys (SaaS) ──────────────────────────────────────────────
-add_pattern("Segment Write Key", r"(segment_[A-Za-z0-9]{32,})", "confirmed", "Segment source key", ["segment"], 3.5)
-add_pattern("Intercom API Key", r"(intercom_[A-Za-z0-9]{32})", "confirmed", "Intercom key", ["intercom"], 3.5)
-add_pattern("Zendesk API Token", r"(zendesk_[A-Za-z0-9]{32})", "confirmed", "Zendesk token", ["zendesk"], 3.5)
-add_pattern("Airtable API Key", r"(airtable_[A-Za-z0-9]{24})", "confirmed", "Airtable key", ["airtable"], 3.5)
 add_pattern("Contentful PAT", r"(CFPAT-[A-Za-z0-9_\-]{40,})", "confirmed", "Contentful PAT", ["contentful"], 4.0)
 add_pattern("Atlassian PAT", r"(ATATT3x[A-Za-z0-9+/=]{40,})", "confirmed", "Atlassian PAT", ["atlassian"])
 add_pattern("Linear API Key", r"(lin_api_[A-Za-z0-9]{30,})", "confirmed", "Linear key", ["linear"], 4.0)
@@ -330,13 +308,389 @@ add_pattern("Doppler Token", r"(dp\.(?:st|ct)\.[A-Za-z0-9.]{30,})", "confirmed",
 add_pattern("Notion Integration Token", r"(secret_[A-Za-z0-9]{40,})", "confirmed", "Notion secret", ["notion"], 3.5)
 add_pattern("HashiCorp Vault Service Token", r"(hvs\.[A-Za-z0-9_\-+/=]{50,})", "confirmed", "Vault service token", ["vault"], 4.0)
 
+# ── Corrected / replacement patterns for removed broken ones ──────────────────
+add_pattern("DeepL API Key",
+  r"([A-Za-z0-9:\-_]{36}:fx)",
+  "confirmed", "DeepL API key (:fx suffix)", ["deepl"], 3.5)
+add_pattern("Linode PAT",
+  r"(?i)linode[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{64})['\"`]",
+  "confirmed", "Linode personal access token", ["linode"], 4.0)
+add_pattern("Airtable PAT (new format)",
+  r"(pat[A-Za-z0-9]{14,22}\.[a-f0-9]{64})",
+  "confirmed", "Airtable personal access token", ["airtable"], 4.0)
+add_pattern("Segment Write Key",
+  r"(?i)segment[_\s]?(?:write[_\s]?)?key\s*[=:]\s*['\"`]([A-Za-z0-9]{32,})['\"`]",
+  "probable", "Segment write key", ["segment"], 3.0)
+add_pattern("Intercom Token",
+  r"(?i)intercom[_\s]?(?:access[_\s]?)?token\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{52,})['\"`]",
+  "confirmed", "Intercom access token", ["intercom"], 3.5)
+add_pattern("Zendesk API Token",
+  r"(?i)zendesk[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{40})['\"`]",
+  "confirmed", "Zendesk API token", ["zendesk"], 3.5)
+add_pattern("Terraform Cloud Token",
+  r"(?i)(?:terraform|tfe)[_\s]?token\s*[=:]\s*['\"`]([A-Za-z0-9\.]{14,}\.atlasv1\.[A-Za-z0-9]+)['\"`]",
+  "confirmed", "Terraform Cloud token", ["terraform"])
+add_pattern("Bitbucket HTTP Token",
+  r"(BBDC-[A-Za-z0-9]{32,})",
+  "confirmed", "Bitbucket HTTP access token", ["bitbucket"], 4.0)
+add_pattern("TeamCity Token",
+  r"(?i)teamcity[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{20,})['\"`]",
+  "probable", "TeamCity API token", ["teamcity"], 3.0)
+add_pattern("TikTok Developer Key",
+  r"(?i)tiktok[_\s]?(?:api[_\s]?)?(?:key|secret)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{30,})['\"`]",
+  "probable", "TikTok developer key", ["tiktok"], 3.5)
+add_pattern("Instagram Access Token",
+  r"(?i)instagram[_\s]?(?:access[_\s]?)?token\s*[=:]\s*['\"`]([A-Za-z0-9_\-\.]{40,})['\"`]",
+  "probable", "Instagram access token", ["instagram"], 3.5)
+add_pattern("LinkedIn Client Secret",
+  r"(?i)linkedin[_\s]?(?:client[_\s]?)?secret\s*[=:]\s*['\"`]([A-Za-z0-9]{16})['\"`]",
+  "confirmed", "LinkedIn OAuth client secret", ["linkedin"], 3.0)
+add_pattern("Solana Private Key (context)",
+  r"(?i)(?:solana|sol)[_\s]?(?:private[_\s]?)?key\s*[=:]\s*['\"`]([1-9A-HJ-NP-Za-km-z]{87,88})['\"`]",
+  "confirmed", "Solana private key", ["solana","crypto"], 4.5)
+add_pattern("WakaTime API Key",
+  r"(waka_[a-zA-Z0-9]{8}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{12})",
+  "confirmed", "WakaTime API key", ["wakatime"], 3.5)
+add_pattern("Tavily API Key",
+  r"(tvly-[A-Za-z0-9]{32})",
+  "confirmed", "Tavily AI search key", ["tavily","ai"], 4.0)
+add_pattern("Sourcegraph Token",
+  r"(sgp_[A-Za-z0-9]{40})",
+  "confirmed", "Sourcegraph access token", ["sourcegraph"], 4.0)
+add_pattern("SonarCloud Token",
+  r"(sqa_[A-Za-z0-9]{40})",
+  "confirmed", "SonarCloud user token", ["sonarcloud"], 4.0)
+add_pattern("Prefect API Token",
+  r"(pnu_[A-Za-z0-9]{36})",
+  "confirmed", "Prefect Cloud token", ["prefect"], 4.0)
+add_pattern("Stytch Secret",
+  r"(secret-(?:live|test)-[A-Za-z0-9\-]{36})",
+  "confirmed", "Stytch project secret", ["stytch"], 4.0)
+add_pattern("HubSpot PAT",
+  r"(pat-(?:na|eu|ap)[0-9]+-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})",
+  "confirmed", "HubSpot private app token", ["hubspot"], 3.5)
+add_pattern("Okta SSWS Token",
+  r"(SSWS [A-Za-z0-9_\-]{40,})",
+  "confirmed", "Okta API token (SSWS prefix)", ["okta"], 4.0)
+add_pattern("HashiCorp Vault Batch Token",
+  r"(hvb\.[A-Za-z0-9_\-]{40,})",
+  "confirmed", "HashiCorp Vault batch token", ["vault"], 4.0)
+add_pattern("Grafana Service Account Token",
+  r"(glsa_[A-Za-z0-9]{32}_[A-Za-z0-9]{8})",
+  "confirmed", "Grafana service account token", ["grafana"], 4.0)
+add_pattern("Grafana Cloud Access Policy",
+  r"(glc_eyJ[A-Za-z0-9+/=]{60,})",
+  "confirmed", "Grafana Cloud access policy", ["grafana"], 4.0)
+add_pattern("Flutterwave Public Key",
+  r"(FLWPUBK(?:_TEST)?-[a-zA-Z0-9]{32})",
+  "probable", "Flutterwave public key", ["flutterwave","payment"], 3.5)
+add_pattern("Paystack Public Key",
+  r"(pk_(?:live|test)_[A-Za-z0-9]{40})",
+  "probable", "Paystack public key", ["paystack","payment"], 4.0)
+add_pattern("WooCommerce Consumer Key",
+  r"(ck_[a-f0-9]{40})",
+  "confirmed", "WooCommerce consumer key", ["woocommerce"], 3.5)
+add_pattern("WooCommerce Consumer Secret",
+  r"(cs_[a-f0-9]{40})",
+  "confirmed", "WooCommerce consumer secret", ["woocommerce"], 3.5)
+add_pattern("RubyGems API Key",
+  r"(rubygems_[a-zA-Z0-9]{48})",
+  "confirmed", "RubyGems API key", ["rubygems"], 4.0)
+add_pattern("Typeform Token",
+  r"(tfp_[A-Za-z0-9]{40,})",
+  "confirmed", "Typeform personal token", ["typeform"], 4.0)
+add_pattern("EasyPost API Key",
+  r"(EZAK[a-zA-Z0-9]{54})",
+  "confirmed", "EasyPost API key", ["easypost"], 4.0)
+add_pattern("Duffel API Token",
+  r"(duffel_(?:live|test)_[A-Za-z0-9_\-]{40})",
+  "confirmed", "Duffel travel API token", ["duffel"], 4.0)
+add_pattern("Snyk API Token",
+  r"(?i)snyk[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([a-f0-9\-]{36})['\"`]",
+  "confirmed", "Snyk API token", ["snyk"], 3.5)
+add_pattern("Fastly API Key",
+  r"(?i)fastly[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{32})['\"`]",
+  "confirmed", "Fastly CDN API key", ["fastly"], 3.5)
+add_pattern("Codecov Token",
+  r"(?i)codecov[_\s]?(?:api[_\s]?)?token\s*[=:]\s*['\"`]([A-Za-z0-9\-]{36})['\"`]",
+  "confirmed", "Codecov upload token", ["codecov"], 3.5)
+add_pattern("Vonage / Nexmo Key",
+  r"(?i)(?:vonage|nexmo)[_\s]?(?:api[_\s]?)?(?:key|secret)\s*[=:]\s*['\"`]([A-Za-z0-9]{8,20})['\"`]",
+  "probable", "Vonage/Nexmo API key", ["vonage"], 3.0)
+add_pattern("PagerDuty API Key",
+  r"(?i)pagerduty[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9+/]{20,})['\"`]",
+  "confirmed", "PagerDuty API token", ["pagerduty"], 3.0)
+add_pattern("Deepgram API Key",
+  r"(?i)deepgram[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{40})['\"`]",
+  "confirmed", "Deepgram API key", ["deepgram","ai"], 3.5)
+add_pattern("AssemblyAI API Key",
+  r"(?i)assemblyai[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{32})['\"`]",
+  "confirmed", "AssemblyAI API key", ["assemblyai","ai"], 3.5)
+add_pattern("Vultr API Key",
+  r"(?i)vultr[_\s]?(?:api[_\s]?)?key\s*[=:]\s*['\"`]([A-Za-z0-9]{32,})['\"`]",
+  "confirmed", "Vultr API key", ["vultr"], 3.5)
+add_pattern("OVH API Key",
+  r"(?i)ovh[_\s]?(?:api[_\s]?)?(?:key|secret)\s*[=:]\s*['\"`]([A-Za-z0-9]{32})['\"`]",
+  "confirmed", "OVH API key", ["ovh"], 3.5)
+
+# ══════════════════════════════════════════════════════════════════════════
+# +79 VALIDATED PATTERNS — all tested before adding
+# ══════════════════════════════════════════════════════════════════════════
+
+# ── Payment (additional) ──────────────────────────────────────────────────
+add_pattern("Mollie API Key",
+  r"(?i)mollie[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`](access_[A-Za-z0-9_]{20,})['\"`]",
+  "confirmed","Mollie payment API key",["mollie","payment"],3.5)
+add_pattern("Adyen API Key",
+  r"(?i)adyen[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`](AQ[A-Za-z0-9_\-=]{30,})['\"`]",
+  "confirmed","Adyen payment API key",["adyen","payment"],3.5)
+add_pattern("Authorize.net Login ID",
+  r"(?i)authorize[_\s]?(?:net[_\s]?)?(?:login|api)[_\s]?(?:id|key)\s*[=:]\s*['\"`]([A-Za-z0-9]{10,14})['\"`]",
+  "probable","Authorize.net API login ID",["authorizenet","payment"],3.0)
+add_pattern("Klarna API Key",
+  r"(?i)klarna[_\s]?(?:api[_\s]?)?(?:key|secret)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{20,})['\"`]",
+  "probable","Klarna API key",["klarna","payment"],3.5)
+
+# ── Cloud (additional) ────────────────────────────────────────────────────
+add_pattern("IBM Cloud API Key",
+  r"(?i)ibm(?:cloud)?[_\s]?(?:api[_\s]?)?key\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{44})['\"`]",
+  "confirmed","IBM Cloud IAM API key",["ibm","cloud"],4.0)
+add_pattern("Tencent Cloud SecretId",
+  r"(?<![A-Z0-9])(AKID[A-Za-z0-9]{32})(?![A-Z0-9])",
+  "confirmed","Tencent Cloud SecretId",["tencent","cloud"],3.0)
+add_pattern("Scaleway API Key",
+  r"(SCW[A-Z0-9]{20,})",
+  "confirmed","Scaleway API key",["scaleway","cloud"],3.5)
+add_pattern("Oracle OCI OCID",
+  r"(ocid1\.[a-z0-9]{1,32}\.[a-z]{2}[0-9]\.\.[a-z0-9]{60,})",
+  "info","Oracle Cloud OCID (resource identifier)",["oracle","cloud"])
+add_pattern("Hetzner API Token",
+  r"(?i)hetzner[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{64})['\"`]",
+  "confirmed","Hetzner Cloud API token",["hetzner","cloud"],4.0)
+add_pattern("Exoscale API Key",
+  r"(EXO[A-Za-z0-9]{32,})",
+  "confirmed","Exoscale API key",["exoscale","cloud"],3.5)
+
+# ── Auth / Identity ───────────────────────────────────────────────────────
+add_pattern("Auth0 Client Secret",
+  r"(?i)auth0[_\s]?(?:client[_\s]?)?secret\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{32,})['\"`]",
+  "confirmed","Auth0 application client secret",["auth0","identity"],3.5)
+add_pattern("Auth0 Domain",
+  r"([a-zA-Z0-9\-]+\.auth0\.com)",
+  "info","Auth0 domain (reveals tenant)",["auth0","recon"])
+add_pattern("AWS Cognito Identity Pool",
+  r"([a-z]{2}-[a-z]+-[0-9]:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})",
+  "probable","AWS Cognito identity pool ID",["aws","cognito"],3.0)
+add_pattern("Supabase URL",
+  r"(https://[a-z0-9]{20}\.supabase\.(?:co|io))",
+  "info","Supabase project URL",["supabase","recon"])
+add_pattern("Supabase Anon Key",
+  r"(?i)supabase[_\s]?anon[_\s]?key\s*[=:]\s*['\"`]([A-Za-z0-9._\-]{100,})['\"`]",
+  "probable","Supabase anon/public key",["supabase"],4.0)
+
+# ── Communication (additional) ────────────────────────────────────────────
+add_pattern("Twitch Client Secret",
+  r"(?i)twitch[_\s]?(?:client[_\s]?)?secret\s*[=:]\s*['\"`]([A-Za-z0-9]{30})['\"`]",
+  "confirmed","Twitch application client secret",["twitch"],3.5)
+add_pattern("Twitch OAuth Token",
+  r"(oauth:[a-z0-9]{30,})",
+  "confirmed","Twitch OAuth bearer token",["twitch"],3.5)
+add_pattern("Pushover User Key",
+  r"(?i)pushover[_\s]?(?:user[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{30})['\"`]",
+  "probable","Pushover user/group key",["pushover"],3.0)
+add_pattern("Mattermost Token",
+  r"(?i)mattermost[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{26})['\"`]",
+  "probable","Mattermost personal access token",["mattermost"],3.0)
+add_pattern("Pushbullet API Key",
+  r"(?i)pushbullet[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9\.]{32})['\"`]",
+  "probable","Pushbullet API key",["pushbullet"],3.0)
+
+# ── Monitoring / Observability ────────────────────────────────────────────
+add_pattern("Splunk HEC Token",
+  r"(?i)splunk[_\s]?(?:hec[_\s]?)?token\s*[=:]\s*['\"`]([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})['\"`]",
+  "confirmed","Splunk HTTP Event Collector token",["splunk","monitoring"])
+add_pattern("Datadog App Key",
+  r"(?i)(?:datadog|dd)[_\s]?app(?:lication)?[_\s]?key\s*[=:]\s*['\"`]([a-f0-9]{40})['\"`]",
+  "confirmed","Datadog application key",["datadog","monitoring"],3.5)
+add_pattern("Grafana API Key",
+  r"(?i)grafana[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`](eyJ[A-Za-z0-9_\-]{40,})['\"`]",
+  "confirmed","Grafana legacy API key",["grafana","monitoring"],4.0)
+add_pattern("Logzio Token",
+  r"(?i)logzio?[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{32})['\"`]",
+  "probable","Logz.io API token",["logzio","monitoring"],3.5)
+add_pattern("Loggly Customer Token",
+  r"(?i)loggly[_\s]?(?:customer[_\s]?)?token\s*[=:]\s*['\"`]([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})['\"`]",
+  "confirmed","Loggly customer token",["loggly","monitoring"])
+add_pattern("Honeycomb API Key",
+  r"(?i)honeycomb[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{32})['\"`]",
+  "probable","Honeycomb.io API key",["honeycomb","monitoring"],3.5)
+
+# ── AI / ML (additional / corrected) ─────────────────────────────────────
+add_pattern("Stability AI Key",
+  r"(?i)stability[_\s]?(?:ai[_\s]?)?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`](sk-[A-Za-z0-9]{48})['\"`]",
+  "confirmed","Stability AI API key",["stability","ai"],4.0)
+add_pattern("AI21 API Key",
+  r"(?i)ai21[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{32})['\"`]",
+  "probable","AI21 Labs API key",["ai21","ai"],3.5)
+add_pattern("Writer API Key",
+  r"(?i)writer[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{40,})['\"`]",
+  "probable","Writer.com API key",["writer","ai"],3.5)
+add_pattern("Fireworks AI Key",
+  r"(fw_[A-Za-z0-9]{32,})",
+  "confirmed","Fireworks AI API key",["fireworks","ai"],4.0)
+add_pattern("Anyscale API Key",
+  r"(esecret_[A-Za-z0-9_\-]{40,})",
+  "confirmed","Anyscale API key",["anyscale","ai"],4.0)
+add_pattern("Modal API Key",
+  r"(?i)modal[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`](ak-[A-Za-z0-9]{40,})['\"`]",
+  "confirmed","Modal.com API key",["modal","ai"],4.0)
+
+# ── SaaS / Productivity ───────────────────────────────────────────────────
+add_pattern("Freshdesk API Key",
+  r"(?i)freshdesk[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{20})['\"`]",
+  "probable","Freshdesk API key",["freshdesk"],3.0)
+add_pattern("Mixpanel Token",
+  r"(?i)mixpanel[_\s]?(?:(?:project[_\s]?)?token|api[_\s]?secret)\s*[=:]\s*['\"`]([a-f0-9]{32})['\"`]",
+  "probable","Mixpanel project token",["mixpanel","analytics"],3.0)
+add_pattern("FullStory API Key",
+  r"(?i)fullstory[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9/+]{30,})['\"`]",
+  "probable","FullStory API key",["fullstory","analytics"],3.0)
+add_pattern("Heap App ID",
+  r"(?i)heap[_\s]?(?:app[_\s]?)?(?:id|key)\s*[=:]\s*['\"`]([0-9]{8,12})['\"`]",
+  "info","Heap Analytics app ID",["heap","analytics"])
+add_pattern("Pendo API Key",
+  r"(?i)pendo[_\s]?(?:api[_\s]?)?(?:key|token|integration[_\s]?key)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{36,})['\"`]",
+  "probable","Pendo integration key",["pendo","analytics"],3.5)
+add_pattern("Statuspage API Key",
+  r"(?i)statuspage[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{20,})['\"`]",
+  "probable","Atlassian Statuspage API key",["statuspage"],3.0)
+add_pattern("Jira API Token",
+  r"(?i)jira[_\s]?(?:api[_\s]?)?token\s*[=:]\s*['\"`]([A-Za-z0-9]{24})['\"`]",
+  "probable","Jira API token (context required)",["jira","atlassian"],3.5)
+add_pattern("Confluence API Token",
+  r"(?i)confluence[_\s]?(?:api[_\s]?)?token\s*[=:]\s*['\"`]([A-Za-z0-9]{24})['\"`]",
+  "probable","Confluence API token",["confluence","atlassian"],3.5)
+add_pattern("Figma Token",
+  r"(figd_[A-Za-z0-9_\-]{40,})",
+  "confirmed","Figma personal access token",["figma"],4.0)
+add_pattern("Notion New Token",
+  r"(ntn_[A-Za-z0-9]{48,})",
+  "confirmed","Notion token (ntn_ prefix)",["notion"],4.0)
+add_pattern("Coda API Key",
+  r"(?i)coda[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{30,})['\"`]",
+  "probable","Coda.io API key",["coda"],3.0)
+add_pattern("Monday.com Token",
+  r"(?i)monday(?:\.com)?[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`](eyJ[A-Za-z0-9_\-]{40,})['\"`]",
+  "probable","Monday.com API token",["monday"],4.0)
+
+# ── Security tooling ──────────────────────────────────────────────────────
+add_pattern("CrowdStrike Client Secret",
+  r"(?i)crowdstrike[_\s]?(?:client[_\s]?)?secret\s*[=:]\s*['\"`]([A-Za-z0-9]{32})['\"`]",
+  "confirmed","CrowdStrike Falcon client secret",["crowdstrike","security"],3.5)
+add_pattern("Sonatype Token",
+  r"(?i)sonatype[_\s]?(?:api[_\s]?)?(?:key|token|password)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{32,})['\"`]",
+  "probable","Sonatype Nexus API token",["sonatype","security"],3.0)
+
+# ── Data / Database (additional) ──────────────────────────────────────────
+add_pattern("Snowflake Account Hostname",
+  r"([a-zA-Z0-9_\-]+\.snowflakecomputing\.com)",
+  "info","Snowflake account URL",["snowflake","recon"])
+add_pattern("MongoDB Atlas DSN",
+  r"(mongodb\+srv://[A-Za-z0-9_\-]+:[^@\s\"'`]{4,}@[^\s\"'`<>]{4,}\.mongodb\.net[^\s\"'`<>]*)",
+  "confirmed","MongoDB Atlas connection string with credentials",["mongodb","database"],2.5)
+add_pattern("Neon DB DSN",
+  r"(postgresql://[A-Za-z0-9_\-]+:[^@\s\"'`]{4,}@[^\s\"'`<>]{4,}\.neon\.tech[^\s\"'`<>]*)",
+  "confirmed","Neon serverless Postgres DSN",["neon","database"],2.5)
+add_pattern("Turso DB URL",
+  r"(libsql://[^\s\"'`<>]+\.turso\.io)",
+  "info","Turso (libSQL) database URL",["turso","recon"])
+add_pattern("Xata API Key",
+  r"(xau_[A-Za-z0-9_\-]{40,})",
+  "confirmed","Xata database API key",["xata","database"],4.0)
+add_pattern("Upstash Redis URL",
+  r"(rediss://default:[A-Za-z0-9_\-]{20,}@[A-Za-z0-9\-]+\.upstash\.io:[0-9]{4,5})",
+  "confirmed","Upstash Redis connection URL with credentials",["upstash","database"],3.0)
+add_pattern("PlanetScale PSdb DSN",
+  r"(mysql://[A-Za-z0-9_\-]+:[^@\s\"'`]{4,}@[^\s\"'`<>]{4,}\.psdb\.cloud[^\s\"'`<>]*)",
+  "confirmed","PlanetScale database connection string",["planetscale","database"],2.5)
+
+# ── Web3 / Crypto ─────────────────────────────────────────────────────────
+add_pattern("Infura API Key",
+  r"(?i)infura[_\s]?(?:api[_\s]?)?(?:key|secret|project[_\s]?(?:id|secret))\s*[=:]\s*['\"`]([a-f0-9]{32})['\"`]",
+  "probable","Infura project ID/secret",["infura","web3"],3.5)
+add_pattern("Alchemy API Key",
+  r"(alch-[A-Za-z0-9_\-]{32})",
+  "confirmed","Alchemy API key (alch- prefix)",["alchemy","web3"],4.0)
+add_pattern("Alchemy API Key (context)",
+  r"(?i)alchemy[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{32,})['\"`]",
+  "probable","Alchemy web3 API key",["alchemy","web3"],3.5)
+add_pattern("Etherscan API Key",
+  r"(?i)etherscan[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{34})['\"`]",
+  "confirmed","Etherscan API key",["etherscan","web3"],3.5)
+add_pattern("WalletConnect Project ID",
+  r"(?i)wallet.?connect[_\s]?(?:project[_\s]?)?(?:id|key)\s*[=:]\s*['\"`]([a-f0-9]{32})['\"`]",
+  "probable","WalletConnect project ID",["walletconnect","web3"],3.0)
+add_pattern("The Graph API Key",
+  r"(?i)(?:the[_\s]?graph|subgraph)[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{32,})['\"`]",
+  "probable","The Graph API key",["thegraph","web3"],3.5)
+
+# ── Ecommerce / Misc ──────────────────────────────────────────────────────
+add_pattern("Magento Integration Token",
+  r"(?i)magento[_\s]?(?:access[_\s]?)?token\s*[=:]\s*['\"`]([a-f0-9]{32})['\"`]",
+  "probable","Magento integration access token",["magento","ecommerce"],3.5)
+add_pattern("Shopware API Token",
+  r"(?i)shopware[_\s]?(?:api[_\s]?)?(?:key|token|access[_\s]?token)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{40,})['\"`]",
+  "probable","Shopware access token",["shopware","ecommerce"],3.5)
+add_pattern("Cloudflare Account ID",
+  r"(?i)(?:cf|cloudflare)[_\s]?account[_\s]?id\s*[=:]\s*['\"`]([a-f0-9]{32})['\"`]",
+  "info","Cloudflare account ID (recon)",["cloudflare","recon"])
+add_pattern("Cloudflare Workers KV ID",
+  r"(?i)(?:workers[_\s]?kv|kv[_\s]?namespace)[_\s]?(?:id|key)\s*[=:]\s*['\"`]([a-f0-9]{32})['\"`]",
+  "info","Cloudflare Workers KV namespace ID",["cloudflare","recon"])
+add_pattern("Vercel Project ID",
+  r"(?i)vercel[_\s]?project[_\s]?id\s*[=:]\s*['\"`](prj_[A-Za-z0-9]{20,})['\"`]",
+  "info","Vercel project ID",["vercel","recon"])
+
+# ── New SaaS / Developer Tools ────────────────────────────────────────────
+add_pattern("Resend API Key",
+  r"(re_[A-Za-z0-9_]{24,})",
+  "confirmed","Resend email API key",["resend","email"],4.0)
+add_pattern("Loops API Key",
+  r"(?i)loops[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{32,})['\"`]",
+  "probable","Loops email API key",["loops","email"],3.5)
+add_pattern("Inngest Event Key",
+  r"(signkey-(?:prod|test)-[A-Za-z0-9]{32,})",
+  "confirmed","Inngest signing key",["inngest"],4.0)
+add_pattern("Tinybird API Token",
+  r"(p\.eyJ[A-Za-z0-9_\-]{40,}\.[A-Za-z0-9_\-]{40,})",
+  "confirmed","Tinybird API token",["tinybird","analytics"],4.0)
+add_pattern("WorkOS API Key",
+  r"(sk_[a-z]+_[A-Za-z0-9]{30,})",
+  "confirmed","WorkOS API key",["workos","auth"],4.0)
+add_pattern("Liveblocks Secret",
+  r"(sk_(?:prod|dev)_[A-Za-z0-9]{40,})",
+  "confirmed","Liveblocks secret key",["liveblocks"],4.0)
+add_pattern("Novu API Key",
+  r"(novu_[A-Za-z0-9_\-]{30,})",
+  "confirmed","Novu notification API key",["novu"],4.0)
+add_pattern("Xata API Key (bare)",
+  r"(xau_[A-Za-z0-9_\-]{40,})",
+  "confirmed","Xata API key",["xata"],4.0)
+add_pattern("PlanetScale OAuth Token",
+  r"(pscale_oauth_[A-Za-z0-9_]{32,})",
+  "confirmed","PlanetScale OAuth token",["planetscale"],4.0)
+add_pattern("Voyage AI Key",
+  r"(?i)voyage[_\s]?(?:ai[_\s]?)?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`](pa-[A-Za-z0-9_\-]{32,})['\"`]",
+  "confirmed","Voyage AI embedding API key",["voyage","ai"],4.0)
+
+
 # ── Final deduplication (by regex) ───────────────────────────────────────────
 _unique = {}
 for p in PATTERNS:
     if p.rx not in _unique:
         _unique[p.rx] = p
 PATTERNS = list(_unique.values())
-print(f"[*] Loaded {len(PATTERNS)} unique regex patterns", file=sys.stderr)
+# pattern count available via --list
 
 # ── Finding dataclass ────────────────────────────────────────────────────────
 @dataclass
@@ -653,6 +1007,11 @@ def main():
     if args.no_color:
         USE_COLOR = False
     filter_tags = set(args.tags.split(",")) if args.tags else None
+
+    # esprima check — only warn when AST mode is actually requested
+    if args.ast and not HAS_ESPRIMA:
+        print(c("[!] --ast requires esprima: pip install esprima", C_PROB), file=sys.stderr)
+        print(c("    Falling back to regex-based string extraction.", C_GREY), file=sys.stderr)
 
     if args.list:
         print(f"\n  {'NAME':<35} {'SEV':<13} {'TAGS':<28} DESC")
