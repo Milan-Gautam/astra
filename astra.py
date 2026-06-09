@@ -684,6 +684,222 @@ add_pattern("Voyage AI Key",
   "confirmed","Voyage AI embedding API key",["voyage","ai"],4.0)
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# +62 PATTERNS from document audit — all regex-validated before adding
+# ══════════════════════════════════════════════════════════════════════════
+
+# ── AWS services (recon/endpoints) ───────────────────────────────────────
+add_pattern("AWS Session Token",
+  r"(?i)aws[_\-]?session[_\-]?token\s*[=:]\s*['\"`]([A-Za-z0-9/+=]{100,})['\"`]",
+  "confirmed","AWS STS session token",["aws"],4.0)
+add_pattern("AWS STS Token (FWO)",
+  r"(?<![A-Za-z0-9])(FWO[A-Za-z0-9/+=]{40,})(?![A-Za-z0-9/+=])",
+  "confirmed","AWS STS token (FWO prefix)",["aws"],4.0)
+add_pattern("Lambda Function ARN",
+  r"(arn:aws:lambda:[a-z0-9\-]+:[0-9]{12}:function:[a-zA-Z0-9\-_:]+)",
+  "info","AWS Lambda function ARN",["aws","recon"])
+add_pattern("SQS Queue URL",
+  r"(https://sqs\.[a-z0-9\-]+\.amazonaws\.com/[0-9]{12}/[a-zA-Z0-9\-_.]+)",
+  "info","AWS SQS queue URL",["aws","recon"])
+add_pattern("SNS Topic ARN",
+  r"(arn:aws:sns:[a-z0-9\-]+:[0-9]{12}:[a-zA-Z0-9\-_.]+)",
+  "info","AWS SNS topic ARN",["aws","recon"])
+add_pattern("RDS Instance Endpoint",
+  r"([a-z0-9\-]+\.[a-z0-9]+\.rds\.amazonaws\.com)",
+  "info","AWS RDS instance endpoint",["aws","recon"])
+add_pattern("ElastiCache Endpoint",
+  r"([a-z0-9\-]+\.[a-z0-9]+\.cache\.amazonaws\.com:[0-9]{4,5})",
+  "info","AWS ElastiCache cluster endpoint",["aws","recon"])
+add_pattern("CloudFront Distribution",
+  r"([a-z0-9]+\.cloudfront\.net)",
+  "info","AWS CloudFront distribution URL",["aws","recon","cdn"])
+add_pattern("API Gateway Endpoint",
+  r"([a-z0-9]+\.execute-api\.[a-z0-9\-]+\.amazonaws\.com)",
+  "info","AWS API Gateway endpoint",["aws","recon"])
+
+# ── GCP additional ────────────────────────────────────────────────────────
+add_pattern("GCP OAuth2 Client ID",
+  r"([0-9]+-[0-9A-Za-z_]+\.apps\.googleusercontent\.com)",
+  "probable","Google OAuth2 client ID",["google","oauth"])
+add_pattern("GCP Pub/Sub Topic",
+  r"(projects/[a-z0-9\-]+/topics/[a-zA-Z0-9\-_.]+)",
+  "info","GCP Pub/Sub topic path",["gcp","recon"])
+
+# ── Azure additional ──────────────────────────────────────────────────────
+add_pattern("Azure Client ID",
+  r"(?i)azure[_\s]?client[_\s]?id\s*[=:]\s*['\"`]([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})['\"`]",
+  "probable","Azure app client ID (UUID)",["azure"])
+add_pattern("Azure Tenant ID",
+  r"(?i)azure[_\s]?tenant[_\s]?id\s*[=:]\s*['\"`]([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})['\"`]",
+  "probable","Azure tenant ID (UUID)",["azure"])
+add_pattern("Azure Key Vault URL",
+  r"(https://[a-z0-9\-]+\.vault\.azure\.net/)",
+  "info","Azure Key Vault URL",["azure","recon"])
+add_pattern("Azure Cosmos DB Endpoint",
+  r"(https://[a-zA-Z0-9\-]+\.documents\.azure\.com:443/)",
+  "info","Azure Cosmos DB endpoint URL",["azure","recon"])
+add_pattern("Azure Service Bus Connection",
+  r"(Endpoint=sb://[^;]+\.servicebus\.windows\.net/[^;\"'`\s]*)",
+  "confirmed","Azure Service Bus connection string",["azure"])
+add_pattern("Azure Blob SAS Token",
+  r"(sig=[A-Za-z0-9%+/]{20,}&se=[0-9T:Z%\-]+&sp=[a-z]+)",
+  "confirmed","Azure Blob SAS token",["azure"])
+
+# ── GitLab additional prefixes ────────────────────────────────────────────
+add_pattern("GitLab Project Token",
+  r"(glptt-[A-Za-z0-9_\-]{20,})",
+  "confirmed","GitLab project access token",["gitlab"],4.0)
+add_pattern("GitLab Runner Token",
+  r"(glrt-[A-Za-z0-9_\-]{20,})",
+  "confirmed","GitLab runner authentication token",["gitlab"],4.0)
+add_pattern("GitLab Service Account Token",
+  r"(glso-[A-Za-z0-9_\-]{20,})",
+  "confirmed","GitLab service account token",["gitlab"],4.0)
+
+# ── Payment additional ────────────────────────────────────────────────────
+add_pattern("Stripe Account ID",
+  r"(?<![A-Za-z0-9])(acct_[A-Za-z0-9]{16,})(?![A-Za-z0-9])",
+  "probable","Stripe connected account ID",["stripe","payment"])
+add_pattern("Braintree Private Key",
+  r"(?i)braintree[_\s]?private[_\s]?key\s*[=:]\s*['\"`]([a-f0-9]{32,})['\"`]",
+  "confirmed","Braintree private key",["braintree","payment"],3.5)
+add_pattern("Wise / TransferWise API Key",
+  r"(?i)wise[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12})['\"`]",
+  "confirmed","Wise (TransferWise) API key",["wise","payment"])
+add_pattern("Revolut API Key",
+  r"(?i)revolut[_\s]?(?:api[_\s]?)?key\s*[=:]\s*['\"`](key_[a-f0-9]{32,})['\"`]",
+  "confirmed","Revolut API key",["revolut","payment"],3.5)
+add_pattern("PayPal Webhook ID",
+  r"(?<![A-Za-z0-9])(WH-[A-Za-z0-9]{20,}-[A-Za-z0-9]{20,})(?![A-Za-z0-9])",
+  "probable","PayPal webhook ID",["paypal","payment"])
+
+# ── Database additional ───────────────────────────────────────────────────
+add_pattern("ClickHouse DSN",
+  r"(clickhouse://[A-Za-z0-9_\-]+:[^@\s\"'`]{4,}@[^\s\"'`<>]{4,})",
+  "confirmed","ClickHouse DSN with credentials",["database","dsn"],2.5)
+add_pattern("FaunaDB Secret",
+  r"(?i)fauna(?:db)?[_\s]?(?:secret|key)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{40,})['\"`]",
+  "confirmed","FaunaDB secret key",["faunadb","database"],3.5)
+add_pattern("JDBC Connection String",
+  r"(jdbc:[a-zA-Z][a-zA-Z0-9+\-.]+://[^\s\"'`<>]{10,})",
+  "confirmed","JDBC connection string",["database","dsn"])
+
+# ── Framework / app secrets ───────────────────────────────────────────────
+add_pattern("Django / Flask Secret Key",
+  r"(?i)(?:django[_\s]?)?secret[_\s]?key\s*[=:]\s*['\"`]([A-Za-z0-9!@#$%^&*()\-_=+{}\[\]|;:,.<>?/~`]{32,})['\"`]",
+  "confirmed","Django/Flask SECRET_KEY value",["django","flask","credentials"],3.5)
+add_pattern("Laravel App Key",
+  r"(?<![A-Za-z0-9/+])(base64:[A-Za-z0-9+/]{44}=*)",
+  "confirmed","Laravel application key (base64: prefix)",["laravel","credentials"],4.0)
+add_pattern("Rails Master Key",
+  r"(?i)rails[_\s]?master[_\s]?key\s*[=:]\s*['\"`]([a-f0-9]{32})['\"`]",
+  "confirmed","Rails credentials master key",["rails","credentials"],3.5)
+add_pattern("JWT Secret Key",
+  r"(?i)jwt[_\s]?secret\s*[=:]\s*['\"`]([A-Za-z0-9_\-!@#$%^&*]{32,})['\"`]",
+  "confirmed","JWT signing secret",["jwt","credentials"],3.5)
+add_pattern("Session Secret",
+  r"(?i)session[_\s]?secret\s*[=:]\s*['\"`]([A-Za-z0-9_\-!@#$%^&*]{32,})['\"`]",
+  "probable","Session secret key",["credentials"],3.0)
+add_pattern("Cookie Secret",
+  r"(?i)cookie[_\s]?secret\s*[=:]\s*['\"`]([A-Za-z0-9_\-!@#$%^&*]{32,})['\"`]",
+  "probable","Cookie signing secret",["credentials"],3.0)
+add_pattern("Encryption Key",
+  r"(?i)encryption[_\s]?key\s*[=:]\s*['\"`]([A-Za-z0-9+/=]{32,})['\"`]",
+  "confirmed","Encryption key literal",["crypto","credentials"],3.5)
+
+# ── Web3 additional ───────────────────────────────────────────────────────
+add_pattern("Ethereum Address",
+  r"(?<![A-Za-z0-9])(0x[a-fA-F0-9]{40})(?![A-Za-z0-9])",
+  "info","Ethereum wallet address",["ethereum","web3","recon"])
+add_pattern("Infura Project Secret",
+  r"(?i)infura[_\s]?(?:project[_\s]?)?secret\s*[=:]\s*['\"`]([a-f0-9]{32})['\"`]",
+  "confirmed","Infura project secret",["infura","web3"],3.5)
+add_pattern("BlockCypher Token",
+  r"(?i)blockcypher[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([a-f0-9]{32})['\"`]",
+  "probable","BlockCypher API token",["blockcypher","web3"],3.5)
+add_pattern("Moralis API Key",
+  r"(?i)moralis[_\s]?(?:api[_\s]?)?(?:web3[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{32,})['\"`]",
+  "probable","Moralis web3 API key",["moralis","web3"],3.5)
+
+# ── Social additional ─────────────────────────────────────────────────────
+add_pattern("Twitter Consumer Secret",
+  r"(?i)twitter[_\s]?(?:consumer[_\s]?)?(?:api[_\s]?)?secret\s*[=:]\s*['\"`]([A-Za-z0-9_]{40,50})['\"`]",
+  "confirmed","Twitter/X consumer secret",["twitter"],3.5)
+add_pattern("Reddit Client Secret",
+  r"(?i)reddit[_\s]?client[_\s]?secret\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{20,30})['\"`]",
+  "probable","Reddit OAuth client secret",["reddit"],3.0)
+
+# ── CI/CD additional ──────────────────────────────────────────────────────
+add_pattern("Bamboo API Token",
+  r"(?i)bamboo[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{32,})['\"`]",
+  "probable","Atlassian Bamboo API token",["bamboo","ci"],3.0)
+add_pattern("Bitrise API Key",
+  r"(?i)bitrise[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{32,})['\"`]",
+  "probable","Bitrise CI API key",["bitrise","ci"],3.0)
+
+# ── Monitoring additional ─────────────────────────────────────────────────
+add_pattern("Elastic APM Secret Token",
+  r"(?i)elastic[_\s]?apm[_\s]?(?:secret[_\s]?)?token\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{32,})['\"`]",
+  "confirmed","Elastic APM secret token",["elastic","monitoring"],3.5)
+add_pattern("Prometheus Remote Write Token",
+  r"(?i)prometheus[_\s]?(?:remote[_\s]?write[_\s]?)?(?:bearer[_\s]?)?token\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{32,})['\"`]",
+  "probable","Prometheus remote write token",["prometheus","monitoring"],3.0)
+
+# ── Security sinks (code analysis) ───────────────────────────────────────
+add_pattern("RCE: exec with user input",
+  r"exec(?:Sync)?\s*\(\s*`[^`]*\$\{[^}]*(?:req\.|body\.|query\.|params\.)",
+  "possible","RCE: exec/execSync with template literal from user input",["rce","js"])
+add_pattern("RCE: vm.runInNewContext",
+  r"vm\.runInNewContext\s*\(\s*(?:req\.|body\.|query\.|params\.)",
+  "possible","RCE: VM context with user-controlled input",["rce","js"])
+add_pattern("SSRF: HTTP call from user input",
+  r"(?:fetch|axios\.(?:get|post|put|delete)|http\.(?:get|request)|got)\s*\(\s*(?:req\.|body\.|query\.|params\.|`[^`]*\$\{(?:req\.|body\.))",
+  "possible","SSRF: outbound HTTP request from user input",["ssrf","js"])
+add_pattern("Path Traversal: file read",
+  r"(?:readFile|readFileSync|createReadStream)\s*\(\s*(?:req\.|body\.|query\.|params\.|path\.join\s*\(\s*__dirname\s*,\s*(?:req\.|body\.))",
+  "possible","Path traversal: file read from user input",["lfi","js"])
+add_pattern("SQLi: raw query concat",
+  r"(?:\.query|\.execute|\.raw)\s*\(\s*(?:`[^`]*\$\{(?:req\.|body\.|query\.)|['\"][^'\"]*\+\s*(?:req\.|body\.|query\.))",
+  "possible","SQLi: raw query with user input concatenation",["sqli","js"])
+add_pattern("Prototype Pollution: deep merge",
+  r"(?:_\.merge|_\.mergeWith|_\.defaultsDeep|Object\.assign)\s*\(\s*(?:\{\s*\}|[a-z]+)\s*,\s*(?:req\.|body\.|query\.|params\.)",
+  "possible","Prototype pollution: deep merge with user input",["prototype-pollution","js"])
+
+# ── Recon / endpoint discovery ────────────────────────────────────────────
+add_pattern("Admin Panel Path",
+  r"['\"`](/(?:admin|administrator|console|dashboard|control-panel|backoffice|back-office|portal|manage|cp)(?:/|['\"`]))",
+  "info","Admin or management panel path",["recon","admin"])
+add_pattern("Swagger / OpenAPI Spec",
+  r"['\"`](/(?:swagger|api-docs|openapi)(?:[/\-]v?[0-9]+)?\.(?:json|yaml|yml))['\"`]",
+  "info","Swagger/OpenAPI specification endpoint",["recon","api"])
+add_pattern("Health Check / Status Endpoint",
+  r"['\"`](/(?:health|healthz|ping|status|ready|alive|liveness|readiness))['\"`]",
+  "info","Health check or status endpoint",["recon"])
+add_pattern("Debug / Profiler Endpoint",
+  r"['\"`](/(?:debug|_debug|devtools|__debug__|profiler|trace|pprof))['\"`]",
+  "info","Debug or profiler endpoint path",["recon"])
+add_pattern("Internal Domain Pattern",
+  r"https?://[^\s\"'`<>]*\.(?:internal|corp|local|intranet|lan)(?:[/:?\s\"'`<>]|$)",
+  "info","Internal/corporate domain pattern",["recon","internal"])
+
+# ── CMS ───────────────────────────────────────────────────────────────────
+add_pattern("WordPress Nonce / API Key",
+  r"(?i)(?:wp|wordpress)[_\s]?(?:json[_\s]?)?(?:nonce|api[_\s]?key)\s*[=:]\s*['\"`]([a-f0-9A-Za-z_]{10,})['\"`]",
+  "probable","WordPress nonce or API key",["wordpress","cms"],3.0)
+add_pattern("Drupal Private Key",
+  r"(?i)drupal[_\s]?private[_\s]?key\s*[=:]\s*['\"`]([A-Za-z0-9_\-]{40,})['\"`]",
+  "probable","Drupal private key",["drupal","cms"],3.5)
+add_pattern("Joomla Secret",
+  r"(?i)joomla[_\s]?(?:secret|key)\s*[=:]\s*['\"`]([A-Za-z0-9]{32,})['\"`]",
+  "probable","Joomla secret key",["joomla","cms"],3.5)
+add_pattern("Wix API Key",
+  r"(?i)wix[_\s]?(?:api[_\s]?)?(?:key|token)\s*[=:]\s*['\"`]([A-Za-z0-9]{32,})['\"`]",
+  "probable","Wix API key",["wix","cms"],3.0)
+add_pattern("BigCommerce Access Token",
+  r"(?i)bigcommerce[_\s]?(?:access[_\s]?)?(?:token|key)\s*[=:]\s*['\"`]([a-f0-9]{32,})['\"`]",
+  "probable","BigCommerce access token",["bigcommerce","ecommerce"],3.5)
+
+
 # ── Final deduplication (by regex) ───────────────────────────────────────────
 _unique = {}
 for p in PATTERNS:
