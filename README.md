@@ -9,13 +9,10 @@
   secret & credential scanner
 ```
 
-300+ patterns · zero dependencies · Python 3.10+
+350+ patterns · zero dependencies · Python 3.10+
 
 ---
-```bash
-pip install esprima   # for AST parsing
-# (optional) pip install requests   # for better HTTP handling
-```
+
 ## Install
 
 ```bash
