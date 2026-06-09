@@ -87,6 +87,27 @@ python3 astra.py --list
 
 ---
 
+## Comparison with other tools
+
+| Feature | **astra** | trufflehog v3 | gitleaks v8 |
+|---|:---:|:---:|:---:|
+| **Pattern count** | 307 | ~700 | ~160 |
+| **JS-specialized** (AST + source maps) | **✓** | — | — |
+| **URL fetch + scan** | **✓** (threaded) | — | — |
+| **False positive handling** | **Excellent** | Poor | Poor |
+| **AI/LLM tokens** | **14+** | 4–5 | 3–4 |
+| **Payment providers** | **12+** | 1 | 2 |
+| **Security sink detection** | **✓** (XSS/RCE/SQLi) | — | — |
+| **Severity classification** | 4 tiers | 2 tiers | 3 tiers |
+| **Git history scanning** | — | ✓ | ✓ |
+| **Pre-commit hook** | — | ✓ | ✓ |
+| **Live API verification** | stub | ✓ (100+ services) | — |
+| **SARIF output** | — | ✓ | ✓ |
+| **JSON output** | ✓ | ✓ | ✓ |
+| **Install method** | Single binary | Go/Docker | Go |
+| **Dependencies** | None (stdlib) | 40+ modules | 20+ modules |
+| **Scan speed** | ~5k lines/s | ~1k lines/s | ~10k lines/s |
+
 ## What it finds
 
 **Cloud** — AWS key ID + secret, GCP service account, Azure Storage DSN, DigitalOcean PAT
@@ -113,8 +134,25 @@ python3 astra.py --list
 
 **Recon** — private IPv4, email addresses
 
----
+## Design philosophy
+
+astra takes a **precision-first, JS-aware approach** rather than maximizing pattern count. Key design decisions:
+
+- **AST extraction** eliminates false positives by understanding code structure, not just regex matching
+- **Source map support** traces minified production code back to original sources
+- **Quoted-value enforcement** avoids flagging common variable assignments like `var x = req.token`
+- **Per-pattern entropy thresholds** allow fine-tuned noise reduction
+- **Threaded URL fetching** enables scanning live web applications at scale
+
+astra complements general-purpose tools like trufflehog and gitleaks — it's a specialized instrument for JavaScript/TypeScript-heavy codebases and modern web stacks where precision matters.
+
 
 ## 🥟 Buy Me a Momo
 
 Love **astra**? Treat me to some momos → [Click here to donate](https://buymemomo.com/milang)
+
+## Contributing
+
+I'd be particularly interested in **new pattern files**. If there's something you regularly grep for in your own work, PRs adding pattern files to the `examples/` directory are very welcome.
+
+Bug fixes are, as always, appreciated.
