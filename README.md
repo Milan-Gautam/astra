@@ -9,7 +9,7 @@
   secret & credential scanner
 ```
 
-350+ patterns · zero dependencies · Python 3.10+
+300+ patterns · zero dependencies · Python 3.10+
 
 ---
 
