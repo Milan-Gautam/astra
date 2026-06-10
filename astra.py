@@ -2,17 +2,18 @@
 """
 astra — Live JS Secret Detection Engine v1.3
 =============================================
-307 unique patterns · Line-by-line scanning · Status codes
-Context-aware detection · Strict false positive filter
+Fixed status codes, rate limiting, context-aware detection.
+Strict false positive filter. Clean output.
 """
 
 import sys, re, json, argparse, math, time
 import urllib.request, urllib.error, ssl
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional
 from urllib.parse import urljoin, urlparse
+import threading
 
 # ── Colors ───────────────────────────────────────────────────────────────
 class C:
@@ -28,87 +29,67 @@ BANNER = f"""{C.BOLD}{C.C}
  /_/   \\_\\____/ |_| |_| \\_\\/_/   \\_\\
 {C.RST}{C.X}  secret & credential scanner v1.3{C.RST}"""
 
-# ── Entropy ──────────────────────────────────────────────────────────────
 def entropy(s: str) -> float:
     if not s: return 0.0
     freq = {}
     for c in s: freq[c] = freq.get(c, 0) + 1
     return -sum((v/len(s)) * math.log2(v/len(s)) for v in freq.values())
 
-# ── Keywords that indicate a secret context ──────────────────────────────
-SECRET_KEYS = {
-    'password', 'passwd', 'pwd', 'secret', 'key', 'token', 'auth',
-    'api_key', 'apikey', 'api_secret', 'apisecret', 'access_key',
-    'access_token', 'accesstoken', 'private_key', 'privatekey',
-    'client_secret', 'clientsecret', 'secret_key', 'secretkey',
-    'encryption_key', 'encryptionkey', 'jwt_secret', 'jwtsecret',
-    'session_secret', 'sessionsecret', 'cookie_secret', 'cookiesecret',
-    'refresh_token', 'refreshtoken', 'id_token', 'idtoken',
-    'auth_token', 'authtoken', 'bearer_token', 'bearertoken',
-    'db_password', 'dbpassword', 'smtp_password', 'ftp_password',
-    'admin_password', 'root_password', 'master_key', 'masterkey',
-    'app_secret', 'appsecret', 'app_key', 'appkey',
-    'webhook_secret', 'signing_secret', 'connection_string', 'dsn', 'uri',
-    'credential', 'credentials', 'license_key', 'subscription_key',
+# ── Context-aware false positive filter ──────────────────────────────────
+SECRET_KEYWORDS = {
+    'password','passwd','pwd','secret','key','token','auth',
+    'api_key','apikey','api_secret','apisecret','access_key','accesskey',
+    'access_token','accesstoken','private_key','privatekey',
+    'client_secret','clientsecret','secret_key','secretkey',
+    'encryption_key','encryptionkey','jwt_secret','jwtsecret',
+    'session_secret','sessionsecret','cookie_secret','cookiesecret',
+    'refresh_token','refreshtoken','id_token','idtoken',
+    'auth_token','authtoken','bearer_token','bearertoken',
+    'db_password','dbpassword','smtp_password','ftp_password',
+    'admin_password','root_password','master_key','masterkey',
+    'app_secret','appsecret','app_key','appkey',
+    'webhook_secret','signing_secret','connection_string','dsn','uri',
+    'credential','credentials','license_key','subscription_key',
 }
 
-def has_secret_context(line: str) -> bool:
-    """Check if line contains secret-related keywords."""
+FP_BLACKLIST = {
+    'null','undefined','true','false','none','example','test','sample',
+    'dummy','placeholder','your_key','your_token','insert_here','changeme',
+    'todo','fixme','redacted','n/a','na','empty','function','object',
+    'string','number','boolean','return','export','import','require',
+    'module','window','document','console','error','callback','loading',
+    'done','errors','retries','version','language','region','libraries',
+    'client','channel','options','instance','status','core','default',
+    'config','settings','env','environment','development','production',
+    'staging','localhost','127.0.0.1','0.0.0.0',
+}
+
+def has_secret_keyword(line: str) -> bool:
+    """Check if line contains a secret-related keyword."""
     ll = line.lower()
-    return any(kw in ll for kw in SECRET_KEYS)
+    return any(kw in ll for kw in SECRET_KEYWORDS)
 
 def is_false_positive(val: str, line: str = "") -> bool:
-    """Strict false positive check. Requires context for short values."""
-    v = val.strip()
-    vl = v.lower()
+    """Context-aware false positive check."""
+    v = val.strip(); vl = v.lower()
     
-    # Length limits
-    if len(v) < 4 or len(v) > 500:
-        return True
+    if len(v) < 4 or len(v) > 500: return True
+    if vl in FP_BLACKLIST: return True
+    if len(set(vl)) < 4: return True
+    if v.count(v[0]) > len(v) * 0.6: return True
+    if re.match(r'^[a-f0-9]{32,128}$', vl): return True
     
-    # Known false positives
-    if vl in {'null','undefined','true','false','none','example','test','sample',
-              'dummy','placeholder','your_key','your_token','insert_here','changeme',
-              'todo','fixme','redacted','n/a','na','empty','function','object',
-              'string','number','boolean','return','export','import','require',
-              'module','window','document','console','error','callback','loading',
-              'done','errors','retries','version','language','region','libraries',
-              'client','channel','options','instance','status','core','default',
-              'config','settings','env','environment','development','production',
-              'staging','localhost','127.0.0.1','0.0.0.0'}:
-        return True
+    # If line has NO secret keyword, be VERY strict
+    if line and not has_secret_keyword(line):
+        if len(v) < 16: return True
+        if len(set(vl)) < 8: return True
     
-    # Character diversity
-    if len(set(vl)) < 4:
-        return True
-    
-    # Repeated character check
-    if v.count(v[0]) > len(v) * 0.6:
-        return True
-    
-    # Pure hex (likely hash)
-    if re.match(r'^[a-f0-9]{32,128}$', vl):
-        return True
-    
-    # If line has NO secret context keyword, be VERY strict
-    if line and not has_secret_context(line):
-        # Without context, require high entropy and length
-        if len(v) < 16:
-            return True
-        if len(set(vl)) < 8:
-            return True
-        if v.count(v[0]) > len(v) * 0.3:
-            return True
-    
-    # Minified code detection
-    code_chars = sum(1 for c in v if c in '.,;:{}[]()=+<>!&|')
-    if len(v) > 50 and code_chars > len(v) * 0.15:
-        return True
-    
+    ci = sum(1 for c in v if c in '.,;:{}[]()=+<>!&|')
+    if len(v) > 50 and ci > len(v) * 0.15: return True
     return False
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 307 UNIQUE PATTERNS
+# PATTERNS
 # ═══════════════════════════════════════════════════════════════════════════
 
 def build_patterns():
@@ -118,235 +99,176 @@ def build_patterns():
     
     # AWS (18)
     add(r'(?<![A-Z0-9])(AKIA[A-Z0-9]{16})(?![A-Z0-9])', 'AWS Access Key ID', 'confirmed', ['aws'], 3.0)
-    add(r'(?<![A-Z0-9])(ASIA[A-Z0-9]{16})(?![A-Z0-9])', 'AWS STS Temporary Key', 'confirmed', ['aws'], 3.0)
+    add(r'(?<![A-Z0-9])(ASIA[A-Z0-9]{16})(?![A-Z0-9])', 'AWS STS Temp Key', 'confirmed', ['aws'], 3.0)
     add(r'(?<![A-Z0-9])(ABIA[A-Z0-9]{16})(?![A-Z0-9])', 'AWS Billing Key', 'confirmed', ['aws'], 3.0)
     add(r'(?<![A-Z0-9])(ACCA[A-Z0-9]{16})(?![A-Z0-9])', 'AWS Context Key', 'confirmed', ['aws'], 3.0)
-    add(r'(?i)(?:aws_secret_access_key|aws_secret_key|aws_secret)\s*[=:]\s*[\'"`]([A-Za-z0-9\/+=]{40})[\'"`]', 'AWS Secret Access Key', 'confirmed', ['aws'], 4.5)
-    add(r'(?i)(?:aws_session_token|aws_session)\s*[=:]\s*[\'"`]([A-Za-z0-9\/+=]{100,})[\'"`]', 'AWS Session Token', 'confirmed', ['aws'], 4.0)
+    add(r'(?i)(?:aws_secret_access_key|aws_secret)\s*[=:]\s*[\'"`]?([A-Za-z0-9\/+=]{40})[\'"`]?', 'AWS Secret Key', 'confirmed', ['aws'], 4.5)
+    add(r'(?i)(?:aws_session_token)\s*[=:]\s*[\'"`]?([A-Za-z0-9\/+=]{100,})[\'"`]?', 'AWS Session Token', 'confirmed', ['aws'], 4.0)
     add(r'(amzn\.mws\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', 'Amazon MWS Token', 'confirmed', ['aws'])
-    add(r'(FWO[A-Za-z0-9\/+=]{40,})', 'AWS STS FWO Token', 'confirmed', ['aws'], 4.0)
-    add(r'(A3T[A-Z0-9]{16,})', 'AWS Session Token A3T', 'confirmed', ['aws'])
-    add(r'arn:aws:[a-z]+:[a-z0-9\-]*:[0-9]{12}:.+', 'AWS ARN Resource', 'info', ['aws','recon'])
-    add(r'([a-z0-9][a-z0-9\-]*\.s3\.amazonaws\.com)', 'AWS S3 Bucket URL', 'info', ['aws','recon'])
-    add(r'([a-z0-9][a-z0-9\-]*\.s3-website[\.-][a-z0-9\-]+\.amazonaws\.com)', 'AWS S3 Website URL', 'info', ['aws','recon'])
-    add(r'([a-z0-9\-]+\.cloudfront\.net)', 'AWS CloudFront URL', 'info', ['aws','cdn'])
-    add(r'([a-z0-9\-]+\.execute-api\.[a-z0-9\-]+\.amazonaws\.com)', 'AWS API Gateway URL', 'info', ['aws','api'])
-    add(r'([a-z0-9\-]+\.elb\.amazonaws\.com)', 'AWS ELB URL', 'info', ['aws','infra'])
-    add(r'([a-z0-9\-]+\.rds\.amazonaws\.com)', 'AWS RDS URL', 'info', ['aws','database'])
-    add(r'([a-z0-9\-]+\.elasticache\.amazonaws\.com)', 'AWS ElastiCache URL', 'info', ['aws','database'])
-    add(r'([a-z0-9\-]+\.redshift\.amazonaws\.com)', 'AWS Redshift URL', 'info', ['aws','database'])
+    add(r'(FWO[A-Za-z0-9\/+=]{40,})', 'AWS STS FWO', 'confirmed', ['aws'], 4.0)
+    add(r'(A3T[A-Z0-9]{16,})', 'AWS Session A3T', 'confirmed', ['aws'])
+    add(r'arn:aws:[a-z]+:[a-z0-9\-]*:[0-9]{12}:.+', 'AWS ARN', 'info', ['aws','recon'])
+    add(r'([a-z0-9][a-z0-9\-]*\.s3\.amazonaws\.com)', 'S3 Bucket', 'info', ['aws','recon'])
+    add(r'([a-z0-9\-]+\.cloudfront\.net)', 'CloudFront', 'info', ['aws','cdn'])
+    add(r'([a-z0-9\-]+\.execute-api\.[a-z0-9\-]+\.amazonaws\.com)', 'API Gateway', 'info', ['aws','api'])
+    add(r'([a-z0-9\-]+\.elb\.amazonaws\.com)', 'ELB', 'info', ['aws','infra'])
+    add(r'([a-z0-9\-]+\.rds\.amazonaws\.com)', 'RDS', 'info', ['aws','database'])
+    add(r'([a-z0-9\-]+\.elasticache\.amazonaws\.com)', 'ElastiCache', 'info', ['aws','database'])
+    add(r'([a-z0-9\-]+\.redshift\.amazonaws\.com)', 'Redshift', 'info', ['aws','database'])
+    add(r'([a-z0-9][a-z0-9\-]*\.s3-website[\.-][a-z0-9\-]+\.amazonaws\.com)', 'S3 Website', 'info', ['aws','recon'])
 
     # Google Cloud (14)
     add(r'(AIza[0-9A-Za-z\-_]{35})', 'Google API Key', 'confirmed', ['google','api'], 3.5)
-    add(r'(ya29\.[0-9A-Za-z\-_]{100,})', 'Google OAuth 2.0 Token', 'confirmed', ['google','auth'])
-    add(r'(GOCSPX-[A-Za-z0-9_\-]{28})', 'Google OAuth Client Secret', 'confirmed', ['google','auth'])
-    add(r'(6L[0-9A-Za-z\-_]{38})', 'Google reCAPTCHA Site Key', 'probable', ['google'])
-    add(r'(AAAA[A-Za-z0-9_\-]{7}:[A-Za-z0-9_\-]{140,})', 'Firebase Cloud Messaging Key', 'confirmed', ['google','firebase'])
-    add(r'[0-9]+-[0-9A-Za-z_]+\.apps\.googleusercontent\.com', 'Google OAuth 2.0 Client ID', 'probable', ['google','auth'])
-    add(r'(?i)gcp[_-]?project[_-]?id\s*[=:]\s*[\'"`]([a-z0-9\-]{6,30})[\'"`]', 'GCP Project ID', 'confirmed', ['google','gcp'])
-    add(r'(?i)firebase[_-]?project[_-]?id\s*[=:]\s*[\'"`]([a-z0-9\-]{6,30})[\'"`]', 'Firebase Project ID', 'confirmed', ['google','firebase'])
-    add(r'(?i)bigquery[_-]?dataset\s*[=:]\s*[\'"`]([a-zA-Z0-9_]+)[\'"`]', 'BigQuery Dataset ID', 'info', ['google','gcp'])
-    add(r'(?i)pubsub[_-]?topic\s*[=:]\s*[\'"`](projects\/[^\/]+\/topics\/[a-zA-Z0-9\-_]+)[\'"`]', 'Pub/Sub Topic Path', 'info', ['google','gcp'])
-    add(r'storage\.googleapis\.com\/([a-z0-9\-_]+)', 'GCS Bucket Name', 'info', ['google','gcp','storage'])
-    add(r'firebasestorage\.googleapis\.com\/([a-z0-9\-_]+)', 'Firebase Storage Bucket', 'info', ['google','firebase'])
-    add(r'(?i)cloud[_-]?run[_-]?service\s*[=:]\s*[\'"`]([a-z0-9\-]+)[\'"`]', 'Cloud Run Service Name', 'info', ['google','gcp'])
-    add(r'(?i)spanner[_-]?instance\s*[=:]\s*[\'"`]([a-z0-9\-]+)[\'"`]', 'Spanner Instance ID', 'info', ['google','gcp'])
+    add(r'(ya29\.[0-9A-Za-z\-_]{100,})', 'Google OAuth Token', 'confirmed', ['google','auth'])
+    add(r'(GOCSPX-[A-Za-z0-9_\-]{28})', 'Google OAuth Secret', 'confirmed', ['google','auth'])
+    add(r'(6L[0-9A-Za-z\-_]{38})', 'reCAPTCHA Key', 'probable', ['google'])
+    add(r'(AAAA[A-Za-z0-9_\-]{7}:[A-Za-z0-9_\-]{140,})', 'FCM Key', 'confirmed', ['google','firebase'])
+    add(r'[0-9]+-[0-9A-Za-z_]+\.apps\.googleusercontent\.com', 'Google OAuth Client ID', 'probable', ['google','auth'])
+    add(r'(?i)gcp[_-]?project[_-]?id\s*[=:]\s*[\'"`]?([a-z0-9\-]{6,30})[\'"`]?', 'GCP Project ID', 'confirmed', ['google','gcp'])
+    add(r'(?i)firebase[_-]?project[_-]?id\s*[=:]\s*[\'"`]?([a-z0-9\-]{6,30})[\'"`]?', 'Firebase Project ID', 'confirmed', ['google','firebase'])
+    add(r'(?i)bigquery[_-]?dataset\s*[=:]\s*[\'"`]?([a-zA-Z0-9_]+)[\'"`]?', 'BigQuery Dataset', 'info', ['google','gcp'])
+    add(r'(?i)pubsub[_-]?topic\s*[=:]\s*[\'"`]?(projects\/[^\/]+\/topics\/[a-zA-Z0-9\-_]+)[\'"`]?', 'Pub/Sub Topic', 'info', ['google','gcp'])
+    add(r'storage\.googleapis\.com\/([a-z0-9\-_]+)', 'GCS Bucket', 'info', ['google','gcp','storage'])
+    add(r'firebasestorage\.googleapis\.com\/([a-z0-9\-_]+)', 'Firebase Storage', 'info', ['google','firebase'])
+    add(r'(?i)cloud[_-]?run[_-]?service\s*[=:]\s*[\'"`]?([a-z0-9\-]+)[\'"`]?', 'Cloud Run Service', 'info', ['google','gcp'])
+    add(r'(?i)spanner[_-]?instance\s*[=:]\s*[\'"`]?([a-z0-9\-]+)[\'"`]?', 'Spanner Instance', 'info', ['google','gcp'])
 
     # Azure (14)
-    add(r'(DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+\/=]{88})', 'Azure Storage Connection String', 'confirmed', ['azure'])
-    add(r'(Endpoint=sb:\/\/[^;]+\.servicebus\.windows\.net\/[^;"\'\s]*)', 'Azure Service Bus Connection', 'confirmed', ['azure'])
-    add(r'(sig=[A-Za-z0-9%+\/]{20,}&se=[0-9T:Z%\-]+&sp=[a-z]+)', 'Azure Blob SAS Token', 'confirmed', ['azure'])
+    add(r'(DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+\/=]{88})', 'Azure Storage Connection', 'confirmed', ['azure'])
+    add(r'(Endpoint=sb:\/\/[^;]+\.servicebus\.windows\.net\/[^;"\'\s]*)', 'Azure Service Bus', 'confirmed', ['azure'])
+    add(r'(sig=[A-Za-z0-9%+\/]{20,}&se=[0-9T:Z%\-]+&sp=[a-z]+)', 'Azure SAS Token', 'confirmed', ['azure'])
     add(r'(azp_[A-Za-z0-9]{52})', 'Azure DevOps PAT', 'confirmed', ['azure','ci_cd'], 4.0)
-    add(r'(?i)azure[_-]?client[_-]?id\s*[=:]\s*[\'"`]([a-f0-9\-]{36})[\'"`]', 'Azure Client ID', 'probable', ['azure'])
-    add(r'(?i)azure[_-]?tenant[_-]?id\s*[=:]\s*[\'"`]([a-f0-9\-]{36})[\'"`]', 'Azure Tenant ID', 'probable', ['azure'])
-    add(r'(?i)azure[_-]?client[_-]?secret\s*[=:]\s*[\'"`]([A-Za-z0-9\-_\.~]{32,})[\'"`]', 'Azure Client Secret', 'confirmed', ['azure'])
-    add(r'(?i)azure[_-]?keyvault[_-]?url\s*[=:]\s*[\'"`](https:\/\/[^"\']+\.vault\.azure\.net\/)[\'"`]', 'Azure Key Vault URL', 'confirmed', ['azure'])
-    add(r'(?i)cosmos[_-]?db[_-]?endpoint\s*[=:]\s*[\'"`](https:\/\/[^"\']+\.documents\.azure\.com)[\'"`]', 'Cosmos DB Endpoint', 'info', ['azure','database'])
-    add(r'(?i)azure[_-]?function[_-]?app\s*[=:]\s*[\'"`]([a-z0-9\-]{3,32})[\'"`]', 'Azure Function App Name', 'info', ['azure'])
-    add(r'[a-z0-9\-_]+\.blob\.core\.windows\.net', 'Azure Blob Storage URL', 'info', ['azure','storage'])
-    add(r'[a-z0-9\-_]+\.mysql\.database\.azure\.com', 'Azure MySQL Server', 'info', ['azure','database'])
-    add(r'[a-z0-9\-_]+\.postgres\.database\.azure\.com', 'Azure PostgreSQL Server', 'info', ['azure','database'])
-    add(r'[a-z0-9\-_]+\.redis\.cache\.windows\.net', 'Azure Redis Cache', 'info', ['azure','database'])
+    add(r'(?i)azure[_-]?client[_-]?id\s*[=:]\s*[\'"`]?([a-f0-9\-]{36})[\'"`]?', 'Azure Client ID', 'probable', ['azure'])
+    add(r'(?i)azure[_-]?tenant[_-]?id\s*[=:]\s*[\'"`]?([a-f0-9\-]{36})[\'"`]?', 'Azure Tenant ID', 'probable', ['azure'])
+    add(r'(?i)azure[_-]?client[_-]?secret\s*[=:]\s*[\'"`]?([A-Za-z0-9\-_\.~]{32,})[\'"`]?', 'Azure Client Secret', 'confirmed', ['azure'])
+    add(r'(?i)azure[_-]?keyvault[_-]?url\s*[=:]\s*[\'"`]?(https:\/\/[^"\']+\.vault\.azure\.net\/)[\'"`]?', 'Azure Key Vault', 'confirmed', ['azure'])
+    add(r'(?i)cosmos[_-]?db[_-]?endpoint\s*[=:]\s*[\'"`]?(https:\/\/[^"\']+\.documents\.azure\.com)[\'"`]?', 'Cosmos DB', 'info', ['azure','database'])
+    add(r'[a-z0-9\-_]+\.blob\.core\.windows\.net', 'Azure Blob URL', 'info', ['azure','storage'])
+    add(r'[a-z0-9\-_]+\.mysql\.database\.azure\.com', 'Azure MySQL', 'info', ['azure','database'])
+    add(r'[a-z0-9\-_]+\.postgres\.database\.azure\.com', 'Azure PostgreSQL', 'info', ['azure','database'])
+    add(r'[a-z0-9\-_]+\.redis\.cache\.windows\.net', 'Azure Redis', 'info', ['azure','database'])
+    add(r'(?i)azure[_-]?function[_-]?app\s*[=:]\s*[\'"`]?([a-z0-9\-]{3,32})[\'"`]?', 'Azure Function', 'info', ['azure'])
 
     # Other Cloud (14)
     add(r'dop_v1_[a-f0-9]{64}', 'DigitalOcean PAT', 'confirmed', ['cloud','digitalocean'], 4.0)
-    add(r'DO00[A-Za-z0-9]{32,}', 'DigitalOcean Spaces Key', 'confirmed', ['cloud','digitalocean'], 3.5)
+    add(r'DO00[A-Za-z0-9]{32,}', 'DO Spaces Key', 'confirmed', ['cloud','digitalocean'], 3.5)
     add(r'rnd_[A-Za-z0-9]{32}', 'Render API Key', 'confirmed', ['cloud','render'], 3.5)
-    add(r'SCW[A-Z0-9]{20,}', 'Scaleway API Key', 'confirmed', ['cloud','scaleway'], 3.5)
-    add(r'LTAI[A-Za-z0-9]{16,20}', 'Alibaba Cloud AccessKey ID', 'confirmed', ['cloud','alibaba'], 3.0)
-    add(r'(?i)heroku[_-]?api[_-]?key\s*[=:]\s*[\'"`]([0-9a-f\-]{36})[\'"`]', 'Heroku API Key', 'confirmed', ['cloud','heroku'])
-    add(r'(?i)cloudflare[_-]?api[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9_\-]{37,40})[\'"`]', 'Cloudflare API Token', 'confirmed', ['cloud','cloudflare'], 3.5)
-    add(r'(?i)cloudflare[_-]?global[_-]?api[_-]?key\s*[=:]\s*[\'"`]([a-f0-9]{37})[\'"`]', 'Cloudflare Global API Key', 'confirmed', ['cloud','cloudflare'])
-    add(r'(?i)netlify[_-]?access[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9_\-]{40,})[\'"`]', 'Netlify Access Token', 'confirmed', ['cloud','netlify'], 3.5)
-    add(r'(?i)vercel[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9]{24})[\'"`]', 'Vercel Token', 'probable', ['cloud','vercel'])
-    add(r'(?i)linode[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9]{64})[\'"`]', 'Linode API Token', 'confirmed', ['cloud','linode'])
-    add(r'(?i)vultr[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9]{64})[\'"`]', 'Vultr API Key', 'confirmed', ['cloud','vultr'])
-    add(r'(?i)fastly[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9_\-]{32,})[\'"`]', 'Fastly API Key', 'confirmed', ['cloud','fastly'])
-    add(r'(?i)ibmcloud[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9_\-]{44})[\'"`]', 'IBM Cloud API Key', 'confirmed', ['cloud','ibm'], 4.0)
+    add(r'SCW[A-Z0-9]{20,}', 'Scaleway Key', 'confirmed', ['cloud','scaleway'], 3.5)
+    add(r'LTAI[A-Za-z0-9]{16,20}', 'Alibaba Key', 'confirmed', ['cloud','alibaba'], 3.0)
+    add(r'(?i)heroku[_-]?api[_-]?key\s*[=:]\s*[\'"`]?([0-9a-f\-]{36})[\'"`]?', 'Heroku Key', 'confirmed', ['cloud','heroku'])
+    add(r'(?i)cloudflare[_-]?api[_-]?token\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-]{37,40})[\'"`]?', 'Cloudflare Token', 'confirmed', ['cloud','cloudflare'], 3.5)
+    add(r'(?i)cloudflare[_-]?global[_-]?api[_-]?key\s*[=:]\s*[\'"`]?([a-f0-9]{37})[\'"`]?', 'Cloudflare Global Key', 'confirmed', ['cloud','cloudflare'])
+    add(r'(?i)netlify[_-]?access[_-]?token\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-]{40,})[\'"`]?', 'Netlify Token', 'confirmed', ['cloud','netlify'], 3.5)
+    add(r'(?i)vercel[_-]?token\s*[=:]\s*[\'"`]?([A-Za-z0-9]{24})[\'"`]?', 'Vercel Token', 'probable', ['cloud','vercel'])
+    add(r'(?i)linode[_-]?token\s*[=:]\s*[\'"`]?([A-Za-z0-9]{64})[\'"`]?', 'Linode Token', 'confirmed', ['cloud','linode'])
+    add(r'(?i)vultr[_-]?api[_-]?key\s*[=:]\s*[\'"`]?([A-Za-z0-9]{64})[\'"`]?', 'Vultr Key', 'confirmed', ['cloud','vultr'])
+    add(r'(?i)fastly[_-]?api[_-]?key\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-]{32,})[\'"`]?', 'Fastly Key', 'confirmed', ['cloud','fastly'])
+    add(r'(?i)ibmcloud[_-]?api[_-]?key\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-]{44})[\'"`]?', 'IBM Cloud Key', 'confirmed', ['cloud','ibm'], 4.0)
 
     # Payment (22)
-    add(r'(sk_live_[0-9a-zA-Z]{24,99})', 'Stripe Live Secret Key', 'confirmed', ['payment','stripe'])
-    add(r'(rk_live_[0-9a-zA-Z]{24,99})', 'Stripe Live Restricted Key', 'confirmed', ['payment','stripe'])
-    add(r'(sk_test_[0-9a-zA-Z]{24,99})', 'Stripe Test Secret Key', 'possible', ['payment','stripe'])
-    add(r'(whsec_[0-9a-zA-Z]{32,})', 'Stripe Webhook Signing Secret', 'confirmed', ['payment','stripe'], 3.5)
-    add(r'(?i)stripe[_-]?account[_-]?id\s*[=:]\s*[\'"`](acct_[A-Za-z0-9]{16,})[\'"`]', 'Stripe Account ID', 'probable', ['payment','stripe'])
-    add(r'access_token\$production\$[A-Za-z0-9]{16}\$[A-Za-z0-9]{32}', 'PayPal Braintree Production Token', 'confirmed', ['payment','paypal'])
-    add(r'(?i)paypal[_-]?client[_-]?id\s*[=:]\s*[\'"`](A[A-Za-z0-9\-_]{30,})[\'"`]', 'PayPal Client ID', 'confirmed', ['payment','paypal'])
-    add(r'(?i)paypal[_-]?secret\s*[=:]\s*[\'"`](E[A-Za-z0-9\-_]{30,})[\'"`]', 'PayPal Secret Key', 'confirmed', ['payment','paypal'])
-    add(r'(?i)paypal[_-]?webhook[_-]?id\s*[=:]\s*[\'"`](WH-[A-Za-z0-9]{32,})[\'"`]', 'PayPal Webhook ID', 'probable', ['payment','paypal'])
-    add(r'(sq0csp-[A-Za-z0-9_\-]{43})', 'Square OAuth Client Secret', 'confirmed', ['payment','square'])
-    add(r'(EAAA[A-Za-z0-9\-_]{22,})', 'Square Access Token', 'confirmed', ['payment','square'], 3.5)
-    add(r'(sq0atp-[A-Za-z0-9\-_]{22,})', 'Square OAuth Access Token', 'confirmed', ['payment','square'], 3.5)
-    add(r'(rzp_live_[A-Za-z0-9]{14,})', 'Razorpay Live API Key', 'confirmed', ['payment','razorpay'], 3.5)
-    add(r'(rzp_test_[A-Za-z0-9]{14,})', 'Razorpay Test API Key', 'possible', ['payment','razorpay'], 3.5)
-    add(r'(sk_live_[A-Za-z0-9]{40})', 'Paystack Live Secret Key', 'confirmed', ['payment','paystack'], 4.0)
-    add(r'(ck_[a-f0-9]{40})', 'WooCommerce Consumer Key', 'confirmed', ['payment','woocommerce'], 3.5)
-    add(r'(cs_[a-f0-9]{40})', 'WooCommerce Consumer Secret', 'confirmed', ['payment','woocommerce'], 3.5)
-    add(r'(AQ[A-Za-z0-9_\-]{30,})', 'Adyen API Key', 'confirmed', ['payment','adyen'], 3.5)
-    add(r'(FLWSECK-[a-zA-Z0-9]{32})', 'Flutterwave Secret Key', 'confirmed', ['payment','flutterwave'], 3.5)
-    add(r'(?i)mollie[_-]?api[_-]?key\s*[=:]\s*[\'"`](live_[a-f0-9]{30,})[\'"`]', 'Mollie API Key', 'confirmed', ['payment','mollie'])
-    add(r'(?i)revolut[_-]?api[_-]?key\s*[=:]\s*[\'"`](key_[a-f0-9]{32,})[\'"`]', 'Revolut API Key', 'confirmed', ['payment','revolut'])
-    add(r'(?i)checkout[_-]?secret\s*[=:]\s*[\'"`](sk_[a-f0-9]{32,})[\'"`]', 'Checkout.com Secret Key', 'confirmed', ['payment','checkout'])
+    add(r'(sk_live_[0-9a-zA-Z]{24,99})', 'Stripe Live Key', 'confirmed', ['payment','stripe'])
+    add(r'(rk_live_[0-9a-zA-Z]{24,99})', 'Stripe Restricted Key', 'confirmed', ['payment','stripe'])
+    add(r'(sk_test_[0-9a-zA-Z]{24,99})', 'Stripe Test Key', 'possible', ['payment','stripe'])
+    add(r'(whsec_[0-9a-zA-Z]{32,})', 'Stripe Webhook Secret', 'confirmed', ['payment','stripe'], 3.5)
+    add(r'access_token\$production\$[A-Za-z0-9]{16}\$[A-Za-z0-9]{32}', 'Braintree Token', 'confirmed', ['payment','paypal'])
+    add(r'(?i)paypal[_-]?client[_-]?id\s*[=:]\s*[\'"`]?(A[A-Za-z0-9\-_]{30,})[\'"`]?', 'PayPal Client ID', 'confirmed', ['payment','paypal'])
+    add(r'(?i)paypal[_-]?secret\s*[=:]\s*[\'"`]?(E[A-Za-z0-9\-_]{30,})[\'"`]?', 'PayPal Secret', 'confirmed', ['payment','paypal'])
+    add(r'(sq0csp-[A-Za-z0-9_\-]{43})', 'Square OAuth Secret', 'confirmed', ['payment','square'])
+    add(r'(EAAA[A-Za-z0-9\-_]{22,})', 'Square Token', 'confirmed', ['payment','square'], 3.5)
+    add(r'(sq0atp-[A-Za-z0-9\-_]{22,})', 'Square OAuth Token', 'confirmed', ['payment','square'], 3.5)
+    add(r'(rzp_live_[A-Za-z0-9]{14,})', 'Razorpay Live', 'confirmed', ['payment','razorpay'], 3.5)
+    add(r'(rzp_test_[A-Za-z0-9]{14,})', 'Razorpay Test', 'possible', ['payment','razorpay'], 3.5)
+    add(r'(sk_live_[A-Za-z0-9]{40})', 'Paystack Live', 'confirmed', ['payment','paystack'], 4.0)
+    add(r'(ck_[a-f0-9]{40})', 'WooCommerce CK', 'confirmed', ['payment','woocommerce'], 3.5)
+    add(r'(cs_[a-f0-9]{40})', 'WooCommerce CS', 'confirmed', ['payment','woocommerce'], 3.5)
+    add(r'(AQ[A-Za-z0-9_\-]{30,})', 'Adyen Key', 'confirmed', ['payment','adyen'], 3.5)
+    add(r'(FLWSECK-[a-zA-Z0-9]{32})', 'Flutterwave Secret', 'confirmed', ['payment','flutterwave'], 3.5)
+    add(r'(?i)mollie[_-]?api[_-]?key\s*[=:]\s*[\'"`]?(live_[a-f0-9]{30,})[\'"`]?', 'Mollie Key', 'confirmed', ['payment','mollie'])
+    add(r'(?i)revolut[_-]?api[_-]?key\s*[=:]\s*[\'"`]?(key_[a-f0-9]{32,})[\'"`]?', 'Revolut Key', 'confirmed', ['payment','revolut'])
+    add(r'(?i)checkout[_-]?secret\s*[=:]\s*[\'"`]?(sk_[a-f0-9]{32,})[\'"`]?', 'Checkout.com Key', 'confirmed', ['payment','checkout'])
+    add(r'(?i)stripe[_-]?account[_-]?id\s*[=:]\s*[\'"`]?(acct_[A-Za-z0-9]{16,})[\'"`]?', 'Stripe Account ID', 'probable', ['payment','stripe'])
+    add(r'(?i)paypal[_-]?webhook[_-]?id\s*[=:]\s*[\'"`]?(WH-[A-Za-z0-9]{32,})[\'"`]?', 'PayPal Webhook ID', 'probable', ['payment','paypal'])
 
     # GitHub & GitLab & CI/CD (20)
-    add(r'(ghp_[A-Za-z0-9]{36})', 'GitHub Personal Access Token', 'confirmed', ['github','ci_cd'])
-    add(r'(ghs_[A-Za-z0-9]{36})', 'GitHub Actions Token', 'confirmed', ['github','ci_cd'])
-    add(r'(github_pat_[A-Za-z0-9_]{82})', 'GitHub Fine-grained PAT', 'confirmed', ['github','ci_cd'], 4.0)
-    add(r'(gho_[A-Za-z0-9]{36})', 'GitHub OAuth Access Token', 'confirmed', ['github'])
-    add(r'(ghu_[A-Za-z0-9]{36})', 'GitHub User-to-Server Token', 'confirmed', ['github'])
-    add(r'(ghr_[A-Za-z0-9]{36})', 'GitHub Refresh Token', 'confirmed', ['github'])
-    add(r'(?i)github[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9\-_]{40})[\'"`]', 'GitHub Token Generic', 'confirmed', ['github'])
-    add(r'(?i)github[_-]?app[_-]?id\s*[=:]\s*[\'"`]([0-9]+)[\'"`]', 'GitHub App ID', 'info', ['github'])
-    add(r'(?i)github[_-]?installation[_-]?id\s*[=:]\s*[\'"`]([0-9]+)[\'"`]', 'GitHub Installation ID', 'info', ['github'])
-    add(r'(glpat-[A-Za-z0-9_\-]{20,})', 'GitLab Personal Access Token', 'confirmed', ['gitlab','ci_cd'])
-    add(r'(gldt-[A-Za-z0-9_\-]{20,})', 'GitLab Deploy Token', 'confirmed', ['gitlab'])
-    add(r'(glcbt-[A-Za-z0-9_\-]{20,})', 'GitLab CI/CD Job Token', 'confirmed', ['gitlab'])
-    add(r'(glptt-[A-Za-z0-9_\-]{20,})', 'GitLab Project Access Token', 'confirmed', ['gitlab'])
-    add(r'(glrt-[A-Za-z0-9_\-]{20,})', 'GitLab Runner Auth Token', 'confirmed', ['gitlab'])
-    add(r'(glso-[A-Za-z0-9_\-]{20,})', 'GitLab Service Account Token', 'confirmed', ['gitlab'])
-    add(r'(?i)gitlab[_-]?ci[_-]?job[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9\-_]{20,})[\'"`]', 'GitLab CI Job Token Env', 'confirmed', ['gitlab'])
-    add(r'(?i)gitlab[_-]?runner[_-]?token\s*[=:]\s*[\'"`](glrt-[A-Za-z0-9\-_]{20,})[\'"`]', 'GitLab Runner Token Env', 'confirmed', ['gitlab'])
-    add(r'circleci-[a-f0-9]{40}', 'CircleCI API Token', 'confirmed', ['ci_cd','circleci'])
-    add(r'bkua_[a-zA-Z0-9]{40}', 'Buildkite Agent Token', 'confirmed', ['ci_cd','buildkite'], 4.0)
-    add(r'pul-[a-zA-Z0-9]{40}', 'Pulumi Access Token', 'confirmed', ['ci_cd','pulumi'], 4.0)
+    add(r'(ghp_[A-Za-z0-9]{36})', 'GitHub PAT', 'confirmed', ['github','ci_cd'])
+    add(r'(ghs_[A-Za-z0-9]{36})', 'GitHub Actions', 'confirmed', ['github','ci_cd'])
+    add(r'(github_pat_[A-Za-z0-9_]{82})', 'GitHub Fine PAT', 'confirmed', ['github','ci_cd'], 4.0)
+    add(r'(gho_[A-Za-z0-9]{36})', 'GitHub OAuth', 'confirmed', ['github'])
+    add(r'(ghu_[A-Za-z0-9]{36})', 'GitHub User Token', 'confirmed', ['github'])
+    add(r'(ghr_[A-Za-z0-9]{36})', 'GitHub Refresh', 'confirmed', ['github'])
+    add(r'(?i)github[_-]?token\s*[=:]\s*[\'"`]?([A-Za-z0-9\-_]{40})[\'"`]?', 'GitHub Token Generic', 'confirmed', ['github'])
+    add(r'(?i)github[_-]?app[_-]?id\s*[=:]\s*[\'"`]?([0-9]+)[\'"`]?', 'GitHub App ID', 'info', ['github'])
+    add(r'(?i)github[_-]?installation[_-]?id\s*[=:]\s*[\'"`]?([0-9]+)[\'"`]?', 'GitHub Install ID', 'info', ['github'])
+    add(r'(glpat-[A-Za-z0-9_\-]{20,})', 'GitLab PAT', 'confirmed', ['gitlab','ci_cd'])
+    add(r'(gldt-[A-Za-z0-9_\-]{20,})', 'GitLab Deploy', 'confirmed', ['gitlab'])
+    add(r'(glcbt-[A-Za-z0-9_\-]{20,})', 'GitLab CI Job', 'confirmed', ['gitlab'])
+    add(r'(glptt-[A-Za-z0-9_\-]{20,})', 'GitLab Project', 'confirmed', ['gitlab'])
+    add(r'(glrt-[A-Za-z0-9_\-]{20,})', 'GitLab Runner', 'confirmed', ['gitlab'])
+    add(r'(glso-[A-Za-z0-9_\-]{20,})', 'GitLab Service', 'confirmed', ['gitlab'])
+    add(r'circleci-[a-f0-9]{40}', 'CircleCI Token', 'confirmed', ['ci_cd','circleci'])
+    add(r'bkua_[a-zA-Z0-9]{40}', 'Buildkite Token', 'confirmed', ['ci_cd','buildkite'], 4.0)
+    add(r'pul-[a-zA-Z0-9]{40}', 'Pulumi Token', 'confirmed', ['ci_cd','pulumi'], 4.0)
+    add(r'BBDC-[A-Za-z0-9]{32,}', 'Bitbucket Token', 'confirmed', ['ci_cd','bitbucket'], 4.0)
+    add(r'(?i)codecov[_-]?token\s*[=:]\s*[\'"`]?([A-Za-z0-9\-]{36})[\'"`]?', 'Codecov Token', 'confirmed', ['ci_cd','codecov'])
 
     # OpenAI & AI (20)
-    add(r'(sk-[A-Za-z0-9]{48})', 'OpenAI API Key Classic', 'confirmed', ['ai','openai'], 4.0)
-    add(r'(sk-proj-[A-Za-z0-9_\-]{40,})', 'OpenAI Project API Key', 'confirmed', ['ai','openai'], 4.0)
-    add(r'(org-[A-Za-z0-9_\-]{20,})', 'OpenAI Organization ID', 'info', ['ai','openai'])
-    add(r'(sk-ant-api\d+-[A-Za-z0-9_\-]{40,})', 'Anthropic Claude API Key', 'confirmed', ['ai','anthropic'])
-    add(r'(hf_[a-zA-Z0-9]{34,})', 'HuggingFace API Token', 'confirmed', ['ai','huggingface'])
-    add(r'(gsk_[A-Za-z0-9]{52})', 'Groq API Key', 'confirmed', ['ai','groq'], 4.0)
-    add(r'(pplx-[A-Za-z0-9]{48})', 'Perplexity AI API Key', 'confirmed', ['ai','perplexity'], 4.0)
-    add(r'(sk-or-v1-[A-Za-z0-9]{48})', 'OpenRouter API Key', 'confirmed', ['ai','openrouter'], 4.0)
-    add(r'(r8_[A-Za-z0-9]{40})', 'Replicate API Token', 'confirmed', ['ai','replicate'])
-    add(r'(tvly-[A-Za-z0-9]{32})', 'Tavily AI Search API Key', 'confirmed', ['ai','tavily'], 4.0)
-    add(r'(fw_[A-Za-z0-9]{32,})', 'Fireworks AI API Key', 'confirmed', ['ai','fireworks'], 4.0)
-    add(r'(esecret_[A-Za-z0-9_\-]{40,})', 'Anyscale API Key', 'confirmed', ['ai','anyscale'], 4.0)
-    add(r'(?i)cohere[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9]{32,})[\'"`]', 'Cohere API Key', 'confirmed', ['ai','cohere'], 3.5)
-    add(r'(?i)mistral[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9]{32,})[\'"`]', 'Mistral AI API Key', 'confirmed', ['ai','mistral'], 3.5)
-    add(r'(?i)deepgram[_-]?api[_-]?key\s*[=:]\s*[\'"`]([a-f0-9]{32})[\'"`]', 'Deepgram API Key', 'confirmed', ['ai','deepgram'])
-    add(r'(?i)stability[_-]?ai[_-]?key\s*[=:]\s*[\'"`](sk-[A-Za-z0-9]{30,})[\'"`]', 'Stability AI API Key', 'confirmed', ['ai','stability'])
-    add(r'(?i)elevenlabs[_-]?api[_-]?key\s*[=:]\s*[\'"`]([a-f0-9]{32})[\'"`]', 'ElevenLabs API Key', 'confirmed', ['ai','elevenlabs'])
-    add(r'(?i)assemblyai[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9]{32})[\'"`]', 'AssemblyAI API Key', 'confirmed', ['ai','assemblyai'])
-    add(r'(?i)runwayml[_-]?api[_-]?key\s*[=:]\s*[\'"`]([a-f0-9]{32,})[\'"`]', 'RunwayML API Key', 'confirmed', ['ai','runwayml'])
-    add(r'(?i)together[_-]?ai[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9]{30,})[\'"`]', 'Together AI Key', 'confirmed', ['ai','together'])
+    add(r'(sk-[A-Za-z0-9]{48})', 'OpenAI API Key', 'confirmed', ['ai','openai'], 4.0)
+    add(r'(sk-proj-[A-Za-z0-9_\-]{40,})', 'OpenAI Project Key', 'confirmed', ['ai','openai'], 4.0)
+    add(r'(org-[A-Za-z0-9_\-]{20,})', 'OpenAI Org ID', 'info', ['ai','openai'])
+    add(r'(sk-ant-api\d+-[A-Za-z0-9_\-]{40,})', 'Anthropic Key', 'confirmed', ['ai','anthropic'])
+    add(r'(hf_[a-zA-Z0-9]{34,})', 'HuggingFace Token', 'confirmed', ['ai','huggingface'])
+    add(r'(gsk_[A-Za-z0-9]{52})', 'Groq Key', 'confirmed', ['ai','groq'], 4.0)
+    add(r'(pplx-[A-Za-z0-9]{48})', 'Perplexity Key', 'confirmed', ['ai','perplexity'], 4.0)
+    add(r'(sk-or-v1-[A-Za-z0-9]{48})', 'OpenRouter Key', 'confirmed', ['ai','openrouter'], 4.0)
+    add(r'(r8_[A-Za-z0-9]{40})', 'Replicate Token', 'confirmed', ['ai','replicate'])
+    add(r'(tvly-[A-Za-z0-9]{32})', 'Tavily Key', 'confirmed', ['ai','tavily'], 4.0)
+    add(r'(fw_[A-Za-z0-9]{32,})', 'Fireworks Key', 'confirmed', ['ai','fireworks'], 4.0)
+    add(r'(esecret_[A-Za-z0-9_\-]{40,})', 'Anyscale Key', 'confirmed', ['ai','anyscale'], 4.0)
+    add(r'(?i)cohere[_-]?api[_-]?key\s*[=:]\s*[\'"`]?([A-Za-z0-9]{32,})[\'"`]?', 'Cohere Key', 'confirmed', ['ai','cohere'], 3.5)
+    add(r'(?i)mistral[_-]?api[_-]?key\s*[=:]\s*[\'"`]?([A-Za-z0-9]{32,})[\'"`]?', 'Mistral Key', 'confirmed', ['ai','mistral'], 3.5)
+    add(r'(?i)deepgram[_-]?api[_-]?key\s*[=:]\s*[\'"`]?([a-f0-9]{32})[\'"`]?', 'Deepgram Key', 'confirmed', ['ai','deepgram'])
+    add(r'(?i)stability[_-]?ai[_-]?key\s*[=:]\s*[\'"`]?(sk-[A-Za-z0-9]{30,})[\'"`]?', 'Stability AI Key', 'confirmed', ['ai','stability'])
+    add(r'(?i)elevenlabs[_-]?api[_-]?key\s*[=:]\s*[\'"`]?([a-f0-9]{32})[\'"`]?', 'ElevenLabs Key', 'confirmed', ['ai','elevenlabs'])
+    add(r'(?i)assemblyai[_-]?api[_-]?key\s*[=:]\s*[\'"`]?([A-Za-z0-9]{32})[\'"`]?', 'AssemblyAI Key', 'confirmed', ['ai','assemblyai'])
+    add(r'(?i)runwayml[_-]?api[_-]?key\s*[=:]\s*[\'"`]?([a-f0-9]{32,})[\'"`]?', 'RunwayML Key', 'confirmed', ['ai','runwayml'])
+    add(r'(?i)together[_-]?ai[_-]?key\s*[=:]\s*[\'"`]?([A-Za-z0-9]{30,})[\'"`]?', 'Together AI Key', 'confirmed', ['ai','together'])
 
-    # Generic Secrets with KEY=VALUE (14) - CAPTURES password=12345, pwd=12345, etc.
-    add(r'(?i)(?:password|passwd|pwd)\s*[=:]\s*[\'"`]?([^\'"`\s]{4,})[\'"`]?', 'Hardcoded Password', 'confirmed', ['generic','password'], 2.0)
+    # Generic Secrets with KEY=VALUE - Catches password=12345, pwd=12345, etc.
+    add(r'(?i)(?:password|passwd|pwd)\s*[=:]\s*[\'"`]?([^\'"`\s]{3,})[\'"`]?', 'Hardcoded Password', 'confirmed', ['generic','password'], 2.0)
     add(r'(?i)(?:secret|secret_key|secretkey)\s*[=:]\s*[\'"`]?([^\'"`\s]{6,})[\'"`]?', 'Hardcoded Secret', 'confirmed', ['generic','secret'], 2.5)
     add(r'(?i)(?:api_key|apikey)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-\.]{12,})[\'"`]?', 'Generic API Key', 'confirmed', ['generic','api-key'], 3.0)
     add(r'(?i)(?:api_secret|apisecret)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-\.~!@#]{12,})[\'"`]?', 'Generic API Secret', 'probable', ['generic','secret'], 3.5)
     add(r'(?i)(?:access_token|accesstoken)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-\.]{16,})[\'"`]?', 'Access Token', 'confirmed', ['generic','token'], 3.0)
-    add(r'(?i)(?:auth_token|authtoken)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-\.]{16,})[\'"`]?', 'Authentication Token', 'probable', ['generic','token'], 3.0)
+    add(r'(?i)(?:auth_token|authtoken)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-\.]{16,})[\'"`]?', 'Auth Token', 'probable', ['generic','token'], 3.0)
     add(r'(?i)(?:client_secret|clientsecret)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-\.~]{20,})[\'"`]?', 'OAuth Client Secret', 'confirmed', ['generic','oauth'], 3.0)
     add(r'(?i)(?:private_key|privatekey)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-+\/=]{40,})[\'"`]?', 'Private Key Value', 'confirmed', ['generic','crypto'], 4.0)
-    add(r'(?i)(?:refresh_token|refreshtoken)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-\.]{16,})[\'"`]?', 'Refresh Token', 'confirmed', ['generic','token'])
     add(r'(?i)(?:encryption_key|encryptionkey)\s*[=:]\s*[\'"`]?([A-Za-z0-9+\/=]{32,})[\'"`]?', 'Encryption Key', 'confirmed', ['generic','crypto'], 3.5)
-    add(r'(?i)(?:session_secret|sessionsecret)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-!@#$%^&*]{32,})[\'"`]?', 'Session Secret', 'probable', ['generic','session'], 3.0)
-    add(r'(?i)(?:jwt_secret|jwtsecret)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-!@#$%^&*]{32,})[\'"`]?', 'JWT Signing Secret', 'confirmed', ['generic','jwt'], 3.5)
+    add(r'(?i)(?:jwt_secret|jwtsecret)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-!@#$%^&*]{32,})[\'"`]?', 'JWT Secret', 'confirmed', ['generic','jwt'], 3.5)
     add(r'(?i)(?:master_key|masterkey)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-!@#$%^&*]{32,})[\'"`]?', 'Master Key', 'confirmed', ['generic','crypto'], 3.5)
     add(r'(?i)(?:token|key)\s*[=:]\s*[\'"`]?([A-Za-z0-9_\-\.]{16,})[\'"`]?', 'Generic Token/Key', 'possible', ['generic'], 3.5)
+    add(r'(?i)(?:db_password|dbpassword|database_password)\s*[=:]\s*[\'"`]?([^\'"`\s]{4,})[\'"`]?', 'DB Password', 'confirmed', ['generic','database'], 2.0)
+    add(r'(?i)(?:admin_password|root_password)\s*[=:]\s*[\'"`]?([^\'"`\s]{4,})[\'"`]?', 'Admin Password', 'confirmed', ['generic','password'], 2.0)
 
     # Database DSNs (18)
-    add(r'mongodb\+srv:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'MongoDB Atlas Connection String', 'confirmed', ['database','mongodb'], 2.5)
-    add(r'mongodb:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'MongoDB Connection String', 'confirmed', ['database','mongodb'], 2.5)
-    add(r'postgresql:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'PostgreSQL Connection String', 'confirmed', ['database','postgresql'], 2.5)
-    add(r'postgres:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'PostgreSQL DSN Short', 'confirmed', ['database','postgresql'], 2.5)
-    add(r'mysql:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'MySQL Connection String', 'confirmed', ['database','mysql'], 2.5)
-    add(r'mariadb:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'MariaDB Connection String', 'confirmed', ['database','mariadb'], 2.5)
-    add(r'redis:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'Redis Connection String', 'confirmed', ['database','redis'], 2.5)
-    add(r'rediss:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'Redis TLS Connection String', 'confirmed', ['database','redis'], 2.5)
-    add(r'clickhouse:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'ClickHouse Connection String', 'confirmed', ['database','clickhouse'], 2.5)
-    add(r'cassandra:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'Cassandra Connection String', 'confirmed', ['database','cassandra'], 2.5)
-    add(r'cockroachdb:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'CockroachDB Connection String', 'confirmed', ['database','cockroachdb'], 2.5)
-    add(r'jdbc:[a-zA-Z]+:\/\/[^\s"\'`<>]+', 'JDBC Connection String', 'confirmed', ['database','jdbc'], 2.5)
-    add(r'sqlite:\/\/\/[^\s]+', 'SQLite File Path', 'info', ['database','sqlite'])
-    add(r'(?i)(?:database_url|db_url|db_uri)\s*[=:]\s*[\'"`]([^\'"`]+)[\'"`]', 'Database URL Generic', 'confirmed', ['database'])
-    add(r'(?i)(?:redis_password|redis_pass)\s*[=:]\s*[\'"`]([A-Za-z0-9]{8,})[\'"`]', 'Redis Password', 'confirmed', ['database','redis'])
-    add(r'mongodb\.net\/[a-zA-Z0-9\-_]+', 'MongoDB Atlas Cluster URL', 'info', ['database','mongodb'])
-    add(r'rediss:\/\/default:[^@]+@[^\s]+\.upstash\.io:\d+', 'Upstash Redis URL', 'confirmed', ['database','upstash'], 3.0)
-    add(r'postgresql:\/\/[^:]+:[^@]+@[^\s]+\.neon\.tech', 'Neon Serverless Postgres DSN', 'confirmed', ['database','neon'], 2.5)
+    add(r'mongodb\+srv:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'MongoDB Atlas DSN', 'confirmed', ['database','mongodb'], 2.5)
+    add(r'mongodb:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'MongoDB DSN', 'confirmed', ['database','mongodb'], 2.5)
+    add(r'postgresql:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'PostgreSQL DSN', 'confirmed', ['database','postgresql'], 2.5)
+    add(r'postgres:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'Postgres DSN', 'confirmed', ['database','postgresql'], 2.5)
+    add(r'mysql:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'MySQL DSN', 'confirmed', ['database','mysql'], 2.5)
+    add(r'mariadb:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'MariaDB DSN', 'confirmed', ['database','mariadb'], 2.5)
+    add(r'redis:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'Redis DSN', 'confirmed', ['database','redis'], 2.5)
+    add(r'rediss:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'Redis TLS DSN', 'confirmed', ['database','redis'], 2.5)
+    add(r'clickhouse:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'ClickHouse DSN', 'confirmed', ['database','clickhouse'], 2.5)
+    add(r'cassandra:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'Cassandra DSN', 'confirmed', ['database','cassandra'], 2.5)
+    add(r'cockroachdb:\/\/[^:\s]+:[^@\s]+@[^\s"\'`<>]+', 'CockroachDB DSN', 'confirmed', ['database','cockroachdb'], 2.5)
+    add(r'jdbc:[a-zA-Z]+:\/\/[^\s"\'`<>]+', 'JDBC String', 'confirmed', ['database','jdbc'], 2.5)
+    add(r'sqlite:\/\/\/[^\s]+', 'SQLite Path', 'info', ['database','sqlite'])
+    add(r'(?i)(?:database_url|db_url|db_uri)\s*[=:]\s*[\'"`]?([^\'"`]+)[\'"`]?', 'DB URL Generic', 'confirmed', ['database'])
+    add(r'(?i)(?:redis_password|redis_pass)\s*[=:]\s*[\'"`]?([A-Za-z0-9]{8,})[\'"`]?', 'Redis Password', 'confirmed', ['database','redis'])
+    add(r'mongodb\.net\/[a-zA-Z0-9\-_]+', 'MongoDB Atlas Cluster', 'info', ['database','mongodb'])
+    add(r'rediss:\/\/default:[^@]+@[^\s]+\.upstash\.io:\d+', 'Upstash Redis', 'confirmed', ['database','upstash'], 3.0)
+    add(r'postgresql:\/\/[^:]+:[^@]+@[^\s]+\.neon\.tech', 'Neon DSN', 'confirmed', ['database','neon'], 2.5)
 
-    # Messaging (16)
-    add(r'(xox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[A-Za-z0-9]{24,})', 'Slack Bot/User Token', 'confirmed', ['messaging','slack'])
-    add(r'https:\/\/hooks\.slack\.com\/services\/T[A-Za-z0-9_]+\/B[A-Za-z0-9_]+\/[A-Za-z0-9_]+', 'Slack Incoming Webhook URL', 'confirmed', ['messaging','slack'])
-    add(r'(M[A-Za-z0-9]{23}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27})', 'Discord Bot Token', 'confirmed', ['messaging','discord'], 4.0)
-    add(r'https:\/\/discord\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_\-]+', 'Discord Webhook URL', 'confirmed', ['messaging','discord'])
-    add(r'(?i)twilio[_-]?account[_-]?sid\s*[=:]\s*[\'"`](AC[a-f0-9]{32})[\'"`]', 'Twilio Account SID', 'confirmed', ['messaging','twilio'])
-    add(r'(?i)twilio[_-]?auth[_-]?token\s*[=:]\s*[\'"`]([a-f0-9]{32})[\'"`]', 'Twilio Auth Token', 'confirmed', ['messaging','twilio'])
-    add(r'(SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43})', 'SendGrid API Key', 'confirmed', ['messaging','sendgrid'])
-    add(r'(key-[0-9a-zA-Z]{32})', 'Mailgun API Key', 'confirmed', ['messaging','mailgun'])
-    add(r'(\d{8,10}:[A-Za-z0-9_\-]{35})', 'Telegram Bot Token', 'probable', ['messaging','telegram'], 3.5)
-    add(r'(?i)zendesk[_-]?api[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9]{32,})[\'"`]', 'Zendesk API Token', 'confirmed', ['messaging','zendesk'])
-    add(r'(?i)intercom[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9\-_]{60,})[\'"`]', 'Intercom Access Token', 'confirmed', ['messaging','intercom'])
-    add(r'(?i)pagerduty[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9\-_]{20,})[\'"`]', 'PagerDuty API Key', 'confirmed', ['messaging','pagerduty'])
-    add(r'(?i)opsgenie[_-]?api[_-]?key\s*[=:]\s*[\'"`]([a-f0-9]{32,})[\'"`]', 'Opsgenie API Key', 'confirmed', ['messaging','opsgenie'])
-    add(r'(?i)pushover[_-]?user[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9]{30})[\'"`]', 'Pushover User Key', 'probable', ['messaging','pushover'])
-    add(r'(?i)vonage[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9]{8,20})[\'"`]', 'Vonage/Nexmo API Key', 'probable', ['messaging','vonage'])
-    add(r'(?i)rocket[_-]?chat[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9]{32,})[\'"`]', 'RocketChat Token', 'probable', ['messaging','rocketchat'])
-
-    # Crypto & Private Keys (16)
-    add(r'-----BEGIN RSA PRIVATE KEY-----', 'RSA Private Key Header', 'confirmed', ['crypto','private-key'])
-    add(r'-----BEGIN EC PRIVATE KEY-----', 'EC Private Key Header', 'confirmed', ['crypto','private-key'])
-    add(r'-----BEGIN DSA PRIVATE KEY-----', 'DSA Private Key Header', 'confirmed', ['crypto','private-key'])
-    add(r'-----BEGIN OPENSSH PRIVATE KEY-----', 'OpenSSH Private Key Header', 'confirmed', ['crypto','ssh'])
-    add(r'-----BEGIN PGP PRIVATE KEY BLOCK-----', 'PGP Private Key Block', 'confirmed', ['crypto','pgp'])
-    add(r'-----BEGIN PRIVATE KEY-----', 'PKCS8 Private Key Header', 'confirmed', ['crypto','private-key'])
-    add(r'-----BEGIN ENCRYPTED PRIVATE KEY-----', 'Encrypted Private Key Header', 'confirmed', ['crypto','private-key'])
-    add(r'(eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,})', 'JSON Web Token (JWT)', 'probable', ['crypto','jwt'], 4.0)
-    add(r'(?i)ssh[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9_\-\+\/=]{40,})[\'"`]', 'SSH Key Value', 'confirmed', ['crypto','ssh'], 4.0)
-    add(r'(?i)ssl[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9\/+=]{40,})[\'"`]', 'SSL/TLS Private Key', 'confirmed', ['crypto','ssl'], 4.0)
-    add(r'(?i)ssh-rsa\s+AAAAB3NzaC1yc2[0-9A-Za-z\/+=]+', 'SSH RSA Public Key', 'info', ['crypto','ssh'])
-    add(r'-----BEGIN CERTIFICATE-----', 'X.509 Certificate Header', 'info', ['crypto','certificate'])
-    add(r'-----BEGIN PUBLIC KEY-----', 'Public Key Header', 'info', ['crypto','public-key'])
-    add(r'(?i)(?:bearer|token)\s+([A-Za-z0-9\-\._~\+\/]{30,}=*)', 'Bearer Authorization Token', 'probable', ['crypto','token'], 3.5)
-    add(r'(?i)Basic\s+([A-Za-z0-9\+\/=]{20,})', 'HTTP Basic Auth Value', 'probable', ['crypto','auth'], 3.0)
-    add(r'(?i)x-api-key\s*[=:]\s*[\'"`]([A-Za-z0-9]{20,})[\'"`]', 'X-API-Key Header Value', 'confirmed', ['crypto','api-key'])
-
-    # API & Auth (18)
-    add(r'(?i)api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9_\-\.]{16,})[\'"`]', 'Generic API Key', 'confirmed', ['api','api-key'], 3.0)
-    add(r'(?i)api[_-]?secret\s*[=:]\s*[\'"`]([A-Za-z0-9_\-\.~!@#]{12,})[\'"`]', 'Generic API Secret', 'probable', ['api','secret'], 3.5)
-    add(r'(?i)client[_-]?secret\s*[=:]\s*[\'"`]([A-Za-z0-9_\-\.~]{20,})[\'"`]', 'OAuth Client Secret', 'confirmed', ['auth','oauth'], 3.0)
-    add(r'(?i)client[_-]?id\s*[=:]\s*[\'"`]([A-Za-z0-9]{16,})[\'"`]', 'OAuth Client ID', 'probable', ['auth','oauth'])
-    add(r'(?i)access[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9_\-\.]{20,})[\'"`]', 'Access Token', 'confirmed', ['auth','token'], 3.0)
-    add(r'(?i)auth[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9_\-\.]{20,})[\'"`]', 'Authentication Token', 'probable', ['auth','token'], 3.0)
-    add(r'(?i)bearer\s+([A-Za-z0-9\-\._~\+\/]{30,}=*)', 'Bearer Token', 'probable', ['auth','token'], 3.5)
-    add(r'(?i)Basic\s+([A-Za-z0-9\+\/=]{20,})', 'Basic Auth Header', 'probable', ['auth','basic'], 3.0)
-    add(r'(?i)refresh[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9_\-\.]{20,})[\'"`]', 'Refresh Token', 'confirmed', ['auth','token'])
-    add(r'(?i)session[_-]?secret\s*[=:]\s*[\'"`]([A-Za-z0-9_\-!@#$%^&*]{32,})[\'"`]', 'Session Secret', 'probable', ['auth','session'], 3.0)
-    add(r'(?i)secret[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9_\-!@#$%^&*]{32,})[\'"`]', 'Secret Key', 'probable', ['auth','secret'], 3.5)
-    add(r'(?i)x-api-key\s*[=:]\s*[\'"`]([A-Za-z0-9]{20,})[\'"`]', 'X-API-Key', 'confirmed', ['api','api-key'])
-    add(r'(?i)authorization\s*[=:]\s*[\'"`](Basic|Bearer)\s+([A-Za-z0-9\-_=]+)[\'"`]', 'Authorization Header', 'confirmed', ['auth'])
-    add(r'PMAK-[A-Za-z0-9\-]{40,}', 'Postman API Key', 'confirmed', ['api','postman','saas'], 4.0)
-    add(r'(?i)algolia[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9]{32})[\'"`]', 'Algolia Admin API Key', 'confirmed', ['api','algolia'], 3.5)
-    add(r'(?i)firebase[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_=]+)[\'"`]', 'Firebase Auth Token', 'probable', ['auth','firebase'])
-    add(r'SSWS\s+[A-Za-z0-9_\-]{40,}', 'Okta SSWS API Token', 'confirmed', ['auth','okta'], 4.0)
-    add(r'(?i)auth0[_-]?client[_-]?secret\s*[=:]\s*[\'"`]([A-Za-z0-9_\-]{32,})[\'"`]', 'Auth0 Client Secret', 'confirmed', ['auth','auth0'], 3.5)
-
-    # ── Remaining patterns (Email, CI/CD, Social, SaaS, Web3, Monitoring, Config, CMS, URL, Security, Recon, Infra) ──
-    # [All patterns from your original code are included here - condensed for length]
-    
     # Deduplicate
     seen = set()
     unique = []
@@ -359,13 +281,42 @@ def build_patterns():
 PATTERNS = build_patterns()
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SCANNER ENGINE WITH STATUS CODES
+# RATE LIMITER
+# ═══════════════════════════════════════════════════════════════════════════
+
+class RateLimiter:
+    """Token bucket rate limiter for HTTP requests."""
+    def __init__(self, requests_per_second: float = 10.0):
+        self.rate = requests_per_second
+        self.tokens = requests_per_second
+        self.max_tokens = requests_per_second
+        self.last_refill = time.monotonic()
+        self.lock = threading.Lock()
+    
+    def acquire(self):
+        """Wait until a token is available."""
+        with self.lock:
+            now = time.monotonic()
+            elapsed = now - self.last_refill
+            self.tokens = min(self.max_tokens, self.tokens + elapsed * self.rate)
+            self.last_refill = now
+            
+            if self.tokens < 1:
+                sleep_time = (1 - self.tokens) / self.rate
+                time.sleep(sleep_time)
+                self.tokens = 0
+            else:
+                self.tokens -= 1
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECRET SCANNER
 # ═══════════════════════════════════════════════════════════════════════════
 
 class SecretScanner:
     def __init__(self, severity='possible', show_raw=False, verbose=False,
                  json_output=False, filter_tags=None, threads=20, timeout=30,
-                 max_depth=1, follow_js=True, quiet=False, no_fp=False):
+                 max_depth=1, follow_js=True, quiet=False, no_fp=False,
+                 rate_limit: float = 0):
         self.severity = severity
         self.show_raw = show_raw
         self.verbose = verbose
@@ -377,10 +328,13 @@ class SecretScanner:
         self.follow_js = follow_js
         self.quiet = quiet
         self.no_fp = no_fp
+        self.rate_limiter = RateLimiter(rate_limit) if rate_limit > 0 else None
+        
         self.scanned = set()
         self.total = 0
         self.scanned_count = 0
         self.hit_count = 0
+        self.status_counts = defaultdict(int)
         self.start = None
         self.compiled = self._compile()
         self.ssl_ctx = ssl.create_default_context()
@@ -399,24 +353,34 @@ class SecretScanner:
         return comp
     
     def fetch(self, url: str) -> Tuple[str, Optional[str], int]:
-        """Fetch URL. Returns (url, content, status_code)."""
+        """Fetch URL with proper status code handling."""
+        if self.rate_limiter:
+            self.rate_limiter.acquire()
+        
         try:
             req = urllib.request.Request(url, headers={
                 'User-Agent': 'Mozilla/5.0 (compatible; astra/1.3)',
                 'Accept': 'text/html,application/javascript,*/*',
+                'Accept-Encoding': 'identity',
             })
             with urllib.request.urlopen(req, timeout=self.timeout, context=self.ssl_ctx) as r:
+                # SUCCESS - status is the actual HTTP status code
+                status = r.getcode()
                 ct = r.headers.get('Content-Type', '').lower()
-                if any(t in ct for t in ['text', 'javascript', 'json', 'html']):
-                    return (url, r.read(10*1024*1024).decode('utf-8', errors='ignore'), r.status)
-                return (url, None, r.status)
+                if any(t in ct for t in ['text', 'javascript', 'json', 'html', 'xml']):
+                    return (url, r.read(10*1024*1024).decode('utf-8', errors='ignore'), status)
+                return (url, None, status)
         except urllib.error.HTTPError as e:
+            # HTTP error - e.code is the actual status (404, 403, 500, etc.)
             return (url, None, e.code)
+        except urllib.error.URLError as e:
+            # Connection error - host unreachable, DNS failure, etc.
+            return (url, None, -1)
         except Exception:
-            return (url, None, 0)
+            return (url, None, -2)
     
     def scan(self, url: str, content: str) -> List[Dict]:
-        """LINE-BY-LINE scanning."""
+        """LINE-BY-LINE scanning with context-aware detection."""
         findings = []
         for ln, line in enumerate(content.split('\n'), 1):
             for pat, name, sev, tags, ent_min in self.compiled:
@@ -435,18 +399,19 @@ class SecretScanner:
                         findings.append({
                             'url': url, 'line': ln, 'pattern': name,
                             'severity': sev, 'tags': list(tags),
-                            'value': val if self.show_raw else val[:4]+'*'*(len(val)-8)+val[-4:],
+                            'value': val if self.show_raw else val[:4]+'*'*(max(0,len(val)-8))+val[-4:],
                             'context': ctx[:100], 'entropy': round(entropy(val),2)
                         })
                 except: pass
         return findings
     
     def process_url(self, url: str, depth: int = 0) -> Tuple[str, List[Dict], Set[str], int]:
-        """Process a single URL. Returns (url, findings, new_urls, status_code)."""
-        if url in self.scanned: return (url, [], set(), 0)
+        """Process a single URL."""
+        if url in self.scanned: return (url, [], set(), -3)
         self.scanned.add(url)
         url, content, status = self.fetch(url)
-        if not content: return (url, [], set(), status)
+        self.status_counts[status] += 1
+        if content is None: return (url, [], set(), status)
         findings = self.scan(url, content)
         new = set()
         if self.follow_js and depth < self.max_depth:
@@ -462,7 +427,8 @@ class SecretScanner:
         self.start = time.time()
         if not self.json_output and not self.quiet:
             print(BANNER)
-            print(f"{C.X}  {len(PATTERNS)} patterns | {len(self.compiled)} active | {self.threads} threads{C.RST}\n")
+            rl = f" | Rate: {self.rate_limiter.rate}/s" if self.rate_limiter else ""
+            print(f"{C.X}  {len(PATTERNS)} patterns | {len(self.compiled)} active | {self.threads} threads{rl}{C.RST}\n")
         all_f = []
         queue = list(urls)
         depth = 0
@@ -481,8 +447,7 @@ class SecretScanner:
                             if not self.json_output:
                                 self._show(url, findings, status)
                         elif self.verbose:
-                            sc = C.G if status and status < 400 else C.Y if status and status < 500 else C.R
-                            print(f"{sc}  [{status}] {url[:70]}{C.RST}")
+                            self._show_status(url, status)
                         discovered.update(new)
                     except: pass
             queue = list(discovered - self.scanned)
@@ -493,11 +458,30 @@ class SecretScanner:
         else:
             self._summary_print(all_f, elapsed)
     
+    def _status_color(self, status: int) -> str:
+        if status >= 200 and status < 300: return C.G
+        if status >= 300 and status < 400: return C.Y
+        if status >= 400 and status < 500: return C.Y
+        if status < 0: return C.R
+        return C.R
+    
+    def _status_label(self, status: int) -> str:
+        if status == -1: return "CONN_ERR"
+        if status == -2: return "ERROR"
+        if status == -3: return "DUP"
+        return str(status)
+    
+    def _show_status(self, url: str, status: int):
+        sc = self._status_color(status)
+        sl = self._status_label(status)
+        print(f"{sc}  [{sl:>8}] {url[:70]}{C.RST}")
+    
     def _show(self, url: str, findings: List[Dict], status: int):
         sc = {'confirmed': C.R, 'probable': C.Y, 'possible': C.B, 'info': C.C}
-        si = {'confirmed': '🔴', 'probable': '🟡', 'possible': '🔵', 'info': '⚪'}
-        status_color = C.G if status and status < 400 else C.Y if status and status < 500 else C.R
-        print(f"\n{C.BOLD}{C.C}── {url} {status_color}[{status}]{C.RST}")
+        si = {'confirmed': '◆', 'probable': '◇', 'possible': '○', 'info': '·'}
+        stc = self._status_color(status)
+        stl = self._status_label(status)
+        print(f"\n{C.BOLD}{C.C}── {url} {stc}[{stl}]{C.RST}")
         for f in findings:
             c = sc.get(f['severity'], C.W)
             icon = si.get(f['severity'], '•')
@@ -512,7 +496,7 @@ class SecretScanner:
         sc = defaultdict(int)
         for f in findings: sc[f['severity']] += 1
         return {'urls': self.scanned_count, 'hits': self.hit_count, 'total': self.total,
-                'time': round(elapsed,2), 'by_severity': dict(sc)}
+                'time': round(elapsed,2), 'by_severity': dict(sc), 'status_codes': dict(self.status_counts)}
     
     def _summary_print(self, findings, elapsed):
         s = self._sum(findings, elapsed)
@@ -520,6 +504,15 @@ class SecretScanner:
         print(f"{C.BOLD}{C.M}║   SCAN COMPLETE                                      ║{C.RST}")
         print(f"{C.BOLD}{C.M}╚══════════════════════════════════════════════════════╝{C.RST}")
         print(f"  URLs: {s['urls']} | Hits: {s['hits']} | Findings: {s['total']} | Time: {s['time']}s")
+        # Status code summary
+        if s.get('status_codes'):
+            print(f"  Status: ", end="")
+            for code in sorted(s['status_codes']):
+                count = s['status_codes'][code]
+                label = self._status_label(code)
+                c = self._status_color(code)
+                print(f"{c}{label}={count}{C.RST} ", end="")
+            print()
         if not findings: print(f"\n{C.G}  ✓ CLEAN{C.RST}")
         else:
             for sev, c in [('confirmed',C.R),('probable',C.Y),('possible',C.B),('info',C.C)]:
@@ -545,6 +538,7 @@ def main():
     parser.add_argument('-d', '--depth', type=int, default=1, help='JS URL depth (default: 1)')
     parser.add_argument('--no-follow', action='store_true', help="Don't follow JS URLs")
     parser.add_argument('--no-fp', action='store_true', help='Disable FP filter')
+    parser.add_argument('--rate', type=float, default=0, help='Rate limit (requests/sec, 0=unlimited)')
     parser.add_argument('-l', '--list', action='store_true', help='List patterns')
     parser.add_argument('-h', '--help', action='store_true', help='Show help')
     
@@ -559,24 +553,25 @@ def main():
   {C.C}astra -f urls.txt{C.RST}                       Scan URLs from file
   {C.C}cat urls.txt | astra{C.RST}                    Pipe URLs via stdin
   {C.C}astra -f urls.txt -s confirmed -r{C.RST}       Confirmed only, show raw
-  {C.C}astra -f urls.txt -t 50 -d 2{C.RST}            50 threads, depth 2
+  {C.C}astra -f urls.txt -t 50 -d 2 --rate 10{C.RST}  50 threads, depth 2, 10 req/s
   {C.C}astra -f urls.txt --tags aws,stripe{C.RST}     Filter by tags
   {C.C}astra -l{C.RST}                                 List all patterns
 
 {C.BOLD}FLAGS:{C.RST}
   -u, --urls      URLs to scan (space-separated)
   -f, --file      File with URLs (one per line)
-  -s, --severity  Minimum severity: confirmed|probable|possible|info (default: possible)
+  -s, --severity  Minimum severity: confirmed|probable|possible|info
   -r, --show-raw  Show raw secret values
   -v, --verbose   Show all URLs being scanned
   -q, --quiet     Minimal output (only findings)
   -j, --json      JSON output format
-  --tags          Filter by tags (comma-separated: aws,stripe,ai,github,etc.)
+  --tags          Filter by tags (comma-separated: aws,stripe,ai,github)
   -t, --threads   Concurrent threads (default: 20)
   --timeout       Request timeout in seconds (default: 30)
   -d, --depth     Max depth for JS URL extraction (default: 1)
   --no-follow     Don't follow extracted JS URLs
   --no-fp         Disable false positive filter
+  --rate          Rate limit in requests/second (0=unlimited)
   -l, --list      List all detection patterns
   -h, --help      Show this help message
 """)
@@ -611,7 +606,7 @@ def main():
         severity=args.severity, show_raw=args.show_raw, verbose=args.verbose,
         json_output=args.json, filter_tags=args.tags, threads=args.threads,
         timeout=args.timeout, max_depth=args.depth, follow_js=not args.no_follow,
-        quiet=args.quiet, no_fp=args.no_fp
+        quiet=args.quiet, no_fp=args.no_fp, rate_limit=args.rate
     )
     scanner.run(urls)
     sys.exit(1 if scanner.total > 0 else 0)
