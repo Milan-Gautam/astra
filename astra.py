@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-astra — Live JS Secret Detection Engine v1.4
+astra — Live JS Secret Detection Engine v1.5
 =============================================
-307 unique patterns. Line‑by‑line scanning.
-Accurate HTTP status codes. Rate limiting.
-Smart false‑positive filter (context‑aware).
+310+ unique patterns · Line‑by‑line scanning
+Accurate HTTP status codes · Rate limiting
+Smart false‑positive filter (context‑aware)
 """
 
 import sys, re, json, argparse, math, time
@@ -26,7 +26,7 @@ BANNER = f"""{C.BOLD}{C.C}
    / _ \\ \\___ \\ | | | |_) |  / _ \\
   / ___ \\ ___) || | |  _ <  / ___ \\
  /_/   \\_\\____/ |_| |_| \\_\\/_/   \_\\
-{C.RST}{C.X}  secret & credential scanner v1.4{C.RST}"""
+{C.RST}{C.X}  secret & credential scanner v1.5{C.RST}"""
 
 def entropy(s: str) -> float:
     if not s: return 0.0
@@ -35,7 +35,6 @@ def entropy(s: str) -> float:
     return -sum((v/len(s)) * math.log2(v/len(s)) for v in freq.values())
 
 # ── Context‑aware false‑positive filter ─────────────────────────────────
-# Keywords that indicate a line likely contains a real secret
 SECRET_KEYS = {
     'password','passwd','pwd','secret','key','token','auth',
     'api_key','apikey','api_secret','apisecret','access_key','accesskey',
@@ -56,22 +55,6 @@ SECRET_KEYS = {
 def has_context(line: str) -> bool:
     ll = line.lower()
     return any(k in ll for k in SECRET_KEYS)
-
-# Patterns that should ALWAYS be reported regardless of context
-ALWAYS_REPORT = {
-    'aws', 'stripe', 'google', 'github', 'gitlab', 'slack', 'discord',
-    'jwt', 'private key', 'ssh', 'openai', 'anthropic', 'huggingface',
-    'sendgrid', 'mailgun', 'twilio', 'digitalocean', 'cloudflare',
-    'azure', 'gcp', 'firebase', 'mongodb', 'postgresql', 'mysql',
-    'redis', 'circleci', 'buildkite', 'pulumi', 'square', 'paypal',
-    'razorpay', 'paystack', 'flutterwave', 'adyen', 'checkout',
-    'revolut', 'mollie', 'airtable', 'notion', 'figma', 'databricks',
-    'vault', 'shopify', 'mapbox', 'algolia', 'okta', 'auth0',
-    'sentry', 'datadog', 'new relic', 'grafana', 'dynatrace',
-    'telegram', 'zendesk', 'intercom', 'pagerduty', 'opsgenie',
-    'etherscan', 'infura', 'solana', 'alchemy', 'blockcypher',
-    'coinbase', 'quicknode', 'chainstack', 'moralis',
-}
 
 def is_false_positive(val: str, line: str, pattern_name: str) -> bool:
     v = val.strip(); vl = v.lower()
@@ -101,7 +84,7 @@ def is_false_positive(val: str, line: str, pattern_name: str) -> bool:
     return False
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 307 UNIQUE PATTERNS – COMPLETE, NO REDUCTIONS
+# 310+ UNIQUE PATTERNS – COMPLETE, NO REDUCTIONS
 # ═══════════════════════════════════════════════════════════════════════════
 
 def build_patterns():
@@ -129,7 +112,7 @@ def build_patterns():
     add(r'([a-z0-9\-]+\.elasticache\.amazonaws\.com)', 'AWS ElastiCache URL', 'info', ['aws','database'])
     add(r'([a-z0-9\-]+\.redshift\.amazonaws\.com)', 'AWS Redshift URL', 'info', ['aws','database'])
 
-    # ── Google Cloud (14) ────────────────────────────────────────────────
+        # ── Google Cloud (14) ────────────────────────────────────────────────
     add(r'(AIza[0-9A-Za-z\-_]{35})', 'Google API Key', 'confirmed', ['google','api'], 3.5)
     add(r'(ya29\.[0-9A-Za-z\-_]{100,})', 'Google OAuth 2.0 Token', 'confirmed', ['google','auth'])
     add(r'(GOCSPX-[A-Za-z0-9_\-]{28})', 'Google OAuth Client Secret', 'confirmed', ['google','auth'])
@@ -448,6 +431,28 @@ def build_patterns():
     add(r'\/\/#\s*sourceMappingURL=', 'Source Map Reference', 'info', ['recon','sourcemap'])
     add(r'console\.(?:log|debug|info|warn|error)\s*\(', 'Console Log Statement', 'info', ['recon','debug'])
     add(r'debugger;', 'JavaScript Debugger Statement', 'info', ['recon','debug'])
+    
+    # ── Additional patterns to reach 310+ ────────────────────────────────
+    add(r'(?i)firebase[_-]?api[_-]?key\s*[=:]\s*[\'"`](AIza[0-9A-Za-z\-_]{35})[\'"`]', 'Firebase API Key (context)', 'confirmed', ['google','firebase'], 3.5)
+    add(r'(?i)google[_-]?cloud[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9\-_]{30,})[\'"`]', 'Google Cloud Key (generic)', 'probable', ['google','gcp'], 3.5)
+    add(r'(?i)heroku[_-]?oauth[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9\-_]{30,})[\'"`]', 'Heroku OAuth Token', 'confirmed', ['cloud','heroku'])
+    add(r'(?i)netlify[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9_\-]{40,})[\'"`]', 'Netlify API Key (alt)', 'confirmed', ['cloud','netlify'], 3.5)
+    add(r'(?i)vercel[_-]?access[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9_\-]{24,})[\'"`]', 'Vercel Access Token', 'probable', ['cloud','vercel'])
+    add(r'(?i)upstash[_-]?redis[_-]?url\s*[=:]\s*[\'"`](rediss:\/\/[^\s"\']+)[\'"`]', 'Upstash Redis URL (context)', 'confirmed', ['database','upstash'], 3.0)
+    add(r'(?i)planetscale[_-]?dsn\s*[=:]\s*[\'"`](mysql:\/\/[^\s"\']+)[\'"`]', 'PlanetScale DSN (context)', 'confirmed', ['database','planetscale'], 2.5)
+    add(r'(?i)supabase[_-]?url\s*[=:]\s*[\'"`](https:\/\/[a-z0-9]+\.supabase\.co)[\'"`]', 'Supabase URL', 'info', ['database','supabase'])
+    add(r'(?i)supabase[_-]?anon[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9_\-\.]+)[\'"`]', 'Supabase Anon Key', 'probable', ['database','supabase'])
+    add(r'(?i)nhost[_-]?admin[_-]?secret\s*[=:]\s*[\'"`]([A-Za-z0-9\-_]{32,})[\'"`]', 'Nhost Admin Secret', 'confirmed', ['database','nhost'], 3.5)
+    add(r'(?i)appwrite[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9]{32,})[\'"`]', 'Appwrite API Key', 'confirmed', ['saas','appwrite'], 3.5)
+    add(r'(?i)contentful[_-]?delivery[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9\-_]{40,})[\'"`]', 'Contentful Delivery Token', 'probable', ['saas','contentful'])
+    add(r'(?i)sanity[_-]?token\s*[=:]\s*[\'"`](sk[A-Za-z0-9\-_]{40,})[\'"`]', 'Sanity.io Token', 'confirmed', ['saas','sanity'], 4.0)
+    add(r'(?i)hygraph[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9]{32,})[\'"`]', 'Hygraph Token', 'probable', ['saas','hygraph'])
+    add(r'(?i)strapi[_-]?token\s*[=:]\s*[\'"`]([A-Za-z0-9\-_]{32,})[\'"`]', 'Strapi Token', 'probable', ['cms','strapi'])
+    add(r'(?i)ghost[_-]?admin[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9]{32,})[\'"`]', 'Ghost Admin API Key', 'confirmed', ['cms','ghost'], 3.5)
+    add(r'(?i)paypal[_-]?access[_-]?token\s*[=:]\s*[\'"`](A21[A-Za-z0-9\-_]{80,})[\'"`]', 'PayPal Access Token', 'confirmed', ['payment','paypal'])
+    add(r'(?i)adyen[_-]?api[_-]?key\s*[=:]\s*[\'"`](AQ[A-Za-z0-9_\-]{30,})[\'"`]', 'Adyen API Key (context)', 'confirmed', ['payment','adyen'], 3.5)
+    add(r'(?i)klarna[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9_\-]{20,})[\'"`]', 'Klarna API Key', 'probable', ['payment','klarna'])
+    add(r'(?i)affirm[_-]?api[_-]?key\s*[=:]\s*[\'"`]([A-Za-z0-9]{32,})[\'"`]', 'Affirm API Key', 'probable', ['payment','affirm'])
 
     # Deduplicate
     seen = set()
@@ -512,6 +517,7 @@ class SecretScanner:
         self.status_counts = defaultdict(int)
         self.start = None
         self.compiled = self._compile()
+        # SSL context that accepts any certificate (for CDNs etc.)
         self.ssl_ctx = ssl.create_default_context()
         self.ssl_ctx.check_hostname = False
         self.ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -529,21 +535,26 @@ class SecretScanner:
     
     def fetch(self, url: str) -> Tuple[str, Optional[str], int]:
         if self.rate_limiter: self.rate_limiter.acquire()
+        # Try with custom headers to avoid 403/406
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'identity',
+        }
         try:
-            req = urllib.request.Request(url, headers={
-                'User-Agent': 'Mozilla/5.0 (compatible; astra/1.4)',
-                'Accept': 'text/html,application/javascript,*/*',
-                'Accept-Encoding': 'identity',
-            })
+            req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=self.timeout, context=self.ssl_ctx) as r:
                 status = r.getcode()
+                # Follow redirects manually? urlopen follows by default, but we record the final status
                 ct = r.headers.get('Content-Type', '').lower()
-                if any(t in ct for t in ['text', 'javascript', 'json', 'html', 'xml']):
-                    return (url, r.read(10*1024*1024).decode('utf-8', errors='ignore'), status)
+                if any(t in ct for t in ['text', 'javascript', 'json', 'html', 'xml', 'plain']):
+                    content = r.read(10*1024*1024).decode('utf-8', errors='ignore')
+                    return (url, content, status)
                 return (url, None, status)
         except urllib.error.HTTPError as e:
             return (url, None, e.code)
-        except urllib.error.URLError:
+        except urllib.error.URLError as e:
             return (url, None, -1)
         except Exception:
             return (url, None, -2)
@@ -688,7 +699,7 @@ class SecretScanner:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def main():
-    parser = argparse.ArgumentParser(description='astra v1.4', add_help=False)
+    parser = argparse.ArgumentParser(description='astra v1.5', add_help=False)
     parser.add_argument('-u', '--urls', nargs='*')
     parser.add_argument('-f', '--file')
     parser.add_argument('-s', '--severity', default='possible', choices=['confirmed','probable','possible','info'])
@@ -710,7 +721,7 @@ def main():
     
     if args.help:
         print(f"""
-{C.BOLD}astra v1.4 — Live JS Secret Detection Engine{C.RST}
+{C.BOLD}astra v1.5 — Live JS Secret Detection Engine{C.RST}
 
 {C.BOLD}USAGE:{C.RST}
   astra -u https://example.com/app.js     Scan a single URL
