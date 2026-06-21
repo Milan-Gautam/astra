@@ -56,7 +56,7 @@ def has_context(line: str) -> bool:
     ll = line.lower()
     return any(k in ll for k in SECRET_KEYS)
 
-def is_false_positive(val: str, line: str, pattern_name: str) -> bool:
+def is_false_positive(val: str, line: str, pattern_name: str, severity: str = 'possible', tags=None) -> bool:
     v = val.strip(); vl = v.lower()
     # Always reject known junk
     if vl in {'null','undefined','true','false','none','example','test','sample',
@@ -73,10 +73,24 @@ def is_false_positive(val: str, line: str, pattern_name: str) -> bool:
     if len(set(vl)) < 4: return True
     if v.count(v[0]) > len(v)*0.6: return True
     if re.match(r'^[a-f0-9]{32,128}$', vl): return True  # hash
-    # For generic patterns, require a secret keyword in the line
-    pn = pattern_name.lower()
-    is_generic = any(w in pn for w in ('password','passwd','pwd','secret','token','key'))
-    if is_generic and line and not has_context(line):
+    # ── FIX: the old check guessed "is this a generic catch-all pattern?"
+    # by searching for substrings like 'key'/'token' in the pattern's
+    # DISPLAY NAME (e.g. "AWS Access Key ID", "GitHub Token Generic").
+    # That's wrong: almost every credential pattern's name contains one of
+    # those words, including ones with a strict, already-confirmed format
+    # (AKIA..., ghp_..., sk_live_...). Those were being silently dropped
+    # whenever the line lacked an unrelated nearby keyword like "secret" or
+    # "password" — a real false-negative, not a false-positive filter.
+    #
+    # The context requirement should only apply to genuinely generic,
+    # loosely-typed catch-all patterns — i.e. ones explicitly tagged
+    # 'generic' in build_patterns(), which are the ones with permissive
+    # value patterns like `key\s*[=:]\s*['"]([^'"]{4,})['"]`. Anything
+    # with a 'confirmed' severity has already matched a strict, unique
+    # format and needs no extra contextual confirmation.
+    tags = tags or []
+    is_loose_generic = severity != 'confirmed' and 'generic' in tags
+    if is_loose_generic and line and not has_context(line):
         return True
     # For all patterns, skip minified junk
     code_chars = sum(1 for c in v if c in '.,;:{}[]()=+<>!&|')
@@ -498,7 +512,7 @@ class SecretScanner:
     def __init__(self, severity='possible', show_raw=False, verbose=False,
                  json_output=False, filter_tags=None, threads=20, timeout=30,
                  max_depth=1, follow_js=True, quiet=False, no_fp=False,
-                 rate_limit: float = 0):
+                 rate_limit: float = 0, retries: int = 2):
         self.severity = severity
         self.show_raw = show_raw
         self.verbose = verbose
@@ -511,6 +525,10 @@ class SecretScanner:
         self.quiet = quiet
         self.no_fp = no_fp
         self.rate_limiter = RateLimiter(rate_limit) if rate_limit > 0 else None
+        # ── NEW: --retries flag. Number of EXTRA attempts after the first,
+        # used only for transient failures (timeouts, connection errors,
+        # 429/500/502/503/504). Default 2 (so up to 3 attempts total).
+        self.retries = max(0, retries)
 
         # ── FIX: thread-safe scanned-set + stats (was a bare, unlocked set) ──
         self._scanned_lock = threading.Lock()
@@ -555,25 +573,28 @@ class SecretScanner:
     # Original bug: urlopen() follows redirects silently and returns the
     # final status only; some servers reply 200 OK with an error-page body
     # (soft-404), and some misreport 404 even when the resource is fine.
-    # This version checks the real status via HEAD first (cheap, no body
-    # download), falls back to GET when HEAD isn't supported (405), and
-    # double-checks the body for soft-404 phrases when status says 200.
-    def fetch(self, url: str) -> Tuple[str, Optional[str], int]:
-        if self.rate_limiter: self.rate_limiter.acquire()
-
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'identity',
-            'Cache-Control': 'no-cache',
-        }
-
-        real_status = -1
+    #
+    # FIX (this round): the previous version returned a hard -1/-2 the
+    # instant the HEAD request raised URLError/Exception — but many real
+    # servers/CDNs (Cloudflare, Akamai, S3 buckets, etc.) reject, throttle,
+    # or just don't support HEAD at all WITHOUT sending a clean 405. That
+    # was the main cause of live-200 URLs being reported as 404/error: the
+    # tool gave up after a broken HEAD and never tried the GET that would
+    # have succeeded. Now any HEAD failure (not just 405) falls through to
+    # GET — HEAD is purely an optimization, never the final word.
+    #
+    # FIX (this round): GET is now treated as the single source of truth
+    # for the reported status. HEAD is only used to short-circuit a small
+    # set of *definitive* failure codes (401/403/429) to save a download;
+    # everything else always gets a real GET so we never report a status
+    # we didn't personally observe on the actual content fetch.
+    def _attempt_fetch(self, url: str, headers: dict) -> Tuple[str, Optional[str], int]:
+        """Single attempt: HEAD probe (best-effort) + GET (authoritative)."""
+        real_status = None
         final_url = url
-        head_supported = True
 
-        # Step 1: HEAD request — cheap way to learn the real status code
+        # Step 1: HEAD probe — best-effort only. ANY failure here just
+        # means we skip the optimization and go straight to GET.
         try:
             req_head = urllib.request.Request(url, headers=headers, method='HEAD')
             with urllib.request.urlopen(req_head, timeout=self.timeout, context=self.ssl_ctx) as r:
@@ -581,33 +602,24 @@ class SecretScanner:
                 final_url = r.geturl()
         except urllib.error.HTTPError as e:
             real_status = e.code
-            if e.code == 405:          # server rejects HEAD; fall through to GET
-                head_supported = False
-        except urllib.error.URLError:
-            return (url, None, -1)
         except Exception:
-            return (url, None, -2)
+            real_status = None   # HEAD unusable — fine, GET will tell us the truth
 
-        # Step 2: early-exit on definitive non-content statuses
-        if head_supported:
-            if real_status in (401, 403, 429):
-                return (url, None, real_status)
-            if real_status == 404:
-                return (url, None, 404)
-            if real_status >= 500:
-                return (url, None, real_status)
+        # Step 2: short-circuit ONLY on definitive, HEAD-confirmed failures.
+        # We do NOT trust HEAD for 404 here, because mismatched HEAD/GET
+        # routing on some CDNs is exactly what produced false 404s before.
+        if real_status in (401, 403, 429):
+            return (url, None, real_status)
 
-        # Step 3: GET for the actual body
+        # Step 3: GET — this result is authoritative.
         try:
             req_get = urllib.request.Request(final_url, headers=headers)
             with urllib.request.urlopen(req_get, timeout=self.timeout, context=self.ssl_ctx) as r:
                 get_status = r.getcode()
                 ct = r.headers.get('Content-Type', '').lower()
-                # If HEAD and GET disagree (CDN quirk), trust GET
-                status = get_status if get_status != real_status else real_status
 
                 if any(t in ct for t in ['text', 'javascript', 'json', 'html', 'xml', 'plain']):
-                    content = r.read(10*1024*1024).decode('utf-8', errors='ignore')
+                    content = r.read(10 * 1024 * 1024).decode('utf-8', errors='ignore')
 
                     # Soft-404: server says 200 but body is an error page
                     if get_status == 200 and len(content) < 500:
@@ -618,8 +630,8 @@ class SecretScanner:
                         )):
                             return (url, None, 404)
 
-                    return (url, content, status)
-                return (url, None, status)
+                    return (url, content, get_status)
+                return (url, None, get_status)
         except urllib.error.HTTPError as e:
             return (url, None, e.code)
         except urllib.error.URLError:
@@ -629,36 +641,125 @@ class SecretScanner:
         except Exception:
             return (url, None, -2)
 
+    # ── FIX: --retries flag. Transient network blips (timeouts, connection
+    # resets, momentary 5xx/429) were previously recorded as final failures
+    # on the first try. Now we retry up to `self.retries` additional times
+    # (default 2) on transient failure codes, with a short backoff, and
+    # only report the result of the LAST attempt. A clean success on any
+    # attempt returns immediately — we don't keep hammering a working URL.
+    def fetch(self, url: str) -> Tuple[str, Optional[str], int]:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'identity',
+            'Cache-Control': 'no-cache',
+        }
+
+        transient = {-1, -2, -4, 429, 500, 502, 503, 504}
+        attempts = max(1, self.retries + 1)
+        last_result = (url, None, -2)
+
+        for attempt in range(attempts):
+            if self.rate_limiter:
+                self.rate_limiter.acquire()
+
+            result = self._attempt_fetch(url, headers)
+            last_result = result
+            _, content, status = result
+
+            if content is not None or status not in transient:
+                # Success, or a definitive (non-transient) failure — stop here.
+                return result
+
+            if attempt < attempts - 1:
+                time.sleep(min(2 ** attempt * 0.5, 4.0))  # 0.5s, 1s, 2s, ... capped
+
+        return last_result
+
+    # ── FIX: thoroughness pass.
+    # Old behavior had two ways secrets could go unreported with zero signal:
+    #   1. A bare `except: pass` swallowed ANY error per (line, pattern) —
+    #      so a single bad match silently skipped that whole line for that
+    #      pattern, with no record it happened.
+    #   2. Minified JS is frequently a single multi-megabyte line. Several
+    #      patterns use unbounded/greedy character classes; on huge lines
+    #      these can be slow enough that we want a safety chunking instead
+    #      of "scanning" something so close to a single still-hanging match
+    #      that nothing downstream is found before the line ends.
+    # Fix: chunk any line over CHUNK_SIZE chars into overlapping windows
+    # (overlap = longest possible match span, generous default 200 chars)
+    # so multi-megabyte minified bundles are still fully covered, and
+    # collect (not silently discard) per-pattern errors for visibility.
+    CHUNK_SIZE = 20000
+    CHUNK_OVERLAP = 200
+
+    def _line_chunks(self, line: str):
+        """Yield (offset, chunk) so very long lines are scanned in full,
+        with enough overlap that a match spanning a chunk boundary is
+        still caught at least once."""
+        if len(line) <= self.CHUNK_SIZE:
+            yield (0, line)
+            return
+        start = 0
+        n = len(line)
+        while start < n:
+            end = min(n, start + self.CHUNK_SIZE)
+            yield (start, line[start:end])
+            if end == n:
+                break
+            start = end - self.CHUNK_OVERLAP  # overlap so boundary matches aren't lost
+
     def scan(self, url: str, content: str) -> List[Dict]:
         findings = []
+        scan_errors = 0
         for ln, line in enumerate(content.split('\n'), 1):
-            for pat, name, sev, tags, ent_min in self.compiled:
-                try:
-                    for m in pat.finditer(line):
-                        # ── FIX: safe group extraction; m.lastindex can be
-                        # None even when the pattern "has" a group if that
-                        # group didn't participate in the match.
-                        try:
-                            val = m.group(1) if (m.lastindex and m.lastindex >= 1) else m.group(0)
-                        except IndexError:
-                            val = m.group(0)
-                        val = val.strip()
-                        if not self.no_fp and is_false_positive(val, line, name):
-                            continue
-                        if ent_min and entropy(val) < ent_min:
-                            continue
-                        s, e = max(0, m.start()-25), min(len(line), m.end()+25)
-                        ctx = line[s:e].strip()
-                        if s > 0: ctx = '…' + ctx
-                        if e < len(line): ctx += '…'
-                        findings.append({
-                            'url': url, 'line': ln, 'pattern': name,
-                            'severity': sev, 'tags': list(tags),
-                            'value': val if self.show_raw else val[:4]+'*'*(max(0,len(val)-8))+val[-4:],
-                            'context': ctx[:100], 'entropy': round(entropy(val),2)
-                        })
-                except: pass
-        return findings
+            for offset, chunk in self._line_chunks(line):
+                for pat, name, sev, tags, ent_min in self.compiled:
+                    try:
+                        for m in pat.finditer(chunk):
+                            # ── safe group extraction; m.lastindex can be
+                            # None even when the pattern "has" a group if
+                            # that group didn't participate in the match.
+                            try:
+                                val = m.group(1) if (m.lastindex and m.lastindex >= 1) else m.group(0)
+                            except IndexError:
+                                val = m.group(0)
+                            val = val.strip()
+                            if not self.no_fp and is_false_positive(val, line, name, sev, tags):
+                                continue
+                            if ent_min and entropy(val) < ent_min:
+                                continue
+                            cs, ce = max(0, m.start() - 25), min(len(chunk), m.end() + 25)
+                            ctx = chunk[cs:ce].strip()
+                            if cs > 0: ctx = '…' + ctx
+                            if ce < len(chunk): ctx += '…'
+                            findings.append({
+                                'url': url, 'line': ln, 'pattern': name,
+                                'severity': sev, 'tags': list(tags),
+                                'value': val if self.show_raw else val[:4] + '*' * (max(0, len(val) - 8)) + val[-4:],
+                                'context': ctx[:100], 'entropy': round(entropy(val), 2)
+                            })
+                    except Exception:
+                        # Previously a bare `except: pass` with zero record.
+                        # Now counted so --verbose can report it instead of
+                        # secrets vanishing with no trace.
+                        scan_errors += 1
+
+        # De-duplicate findings produced twice by chunk overlap (same url,
+        # line, pattern, and value reported from both sides of a boundary).
+        deduped = []
+        seen_keys = set()
+        for f in findings:
+            key = (f['line'], f['pattern'], f['value'])
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped.append(f)
+
+        if scan_errors and self.verbose and not self.json_output:
+            print(f"{C.Y}  [!] {scan_errors} pattern error(s) while scanning {url} (non-fatal){C.RST}")
+
+        return deduped
 
     def process_url(self, url: str, depth: int = 0):
         # ── FIX: atomic check-and-add instead of separate check + add ────
@@ -803,6 +904,7 @@ def main():
     parser.add_argument('--no-follow', action='store_true')
     parser.add_argument('--no-fp', action='store_true')
     parser.add_argument('--rate', type=float, default=0, help='Rate limit (req/sec, 0=unlimited)')
+    parser.add_argument('--retries', type=int, default=2, help='Extra fetch attempts on transient failure (default: 2)')
     parser.add_argument('-l', '--list', action='store_true')
     parser.add_argument('-h', '--help', action='store_true')
 
@@ -836,6 +938,7 @@ def main():
   --no-follow     Don't follow JS URLs
   --no-fp         Disable FP filter
   --rate          Rate limit (req/sec, 0=unlimited)
+  --retries       Extra fetch attempts on transient failure (default: 2)
   -l, --list      List patterns
   -h, --help      Show help
 """)
@@ -869,10 +972,11 @@ def main():
         severity=args.severity, show_raw=args.show_raw, verbose=args.verbose,
         json_output=args.json, filter_tags=args.tags, threads=args.threads,
         timeout=args.timeout, max_depth=args.depth, follow_js=not args.no_follow,
-        quiet=args.quiet, no_fp=args.no_fp, rate_limit=args.rate
+        quiet=args.quiet, no_fp=args.no_fp, rate_limit=args.rate, retries=args.retries
     )
     scanner.run(urls)
     sys.exit(1 if scanner.total > 0 else 0)
 
 if __name__ == '__main__':
     main()
+    
