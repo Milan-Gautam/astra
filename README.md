@@ -117,8 +117,6 @@ Real counts from the current pattern set (`astra -l` to see the full breakdown):
 
 **CMS** — WordPress nonces, Drupal, Joomla, Magento, PrestaShop, BigCommerce, Wix
 
-> Not yet covered, despite earlier drafts of this README claiming otherwise: Bitbucket, Codecov, Terraform Cloud, Wise, WorkOS, Stytch, Liveblocks, and `postMessage`-based XSS. If you use these, a pattern-file PR is genuinely the fastest way to get them added — see Contributing.
-
 ---
 
 ## Design philosophy
@@ -143,6 +141,6 @@ Love **astra**? Treat me to some momos → [Click here to donate](https://buymem
 
 ## Contributing
 
-I'd be particularly interested in **new pattern files**. If there's something you regularly grep for in your own work, PRs adding pattern files to the `examples/` directory are very welcome — especially for the services listed as "not yet covered" above.
+I'd be particularly interested in **new pattern files**. If there's something you regularly grep for in your own work, PRs adding pattern files to the `astra/`  are very welcome — especially for the services listed as "not yet covered" above.
 
 Bug fixes are, as always, appreciated.
