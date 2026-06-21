@@ -61,23 +61,22 @@ FLAGS:
 
 ## Comparison with other tools
 
-| Feature | **astra** | trufflehog v3 | gitleaks v8 |
-|---|:---:|:---:|:---:|
-| **Pattern count** | 307 | ~700 | ~160 |
-| **JS-specialized** | ✓ | — | — |
-| **URL fetch + scan** | ✓ (threaded) | — | — |
-| **False positive handling** | Excellent | Poor | Poor |
-| **AI/LLM tokens** | 20+ | 4–5 | 3–4 |
-| **Payment providers** | 22+ | 1 | 2 |
-| **Security sink detection** | ✓ (XSS/RCE/SQLi) | — | — |
-| **Severity classification** | 4 tiers | 2 tiers | 3 tiers |
-| **Git history scanning** | — | ✓ | ✓ |
-| **Pre-commit hook** | — | ✓ | ✓ |
-| **Live API verification** | — | ✓ (100+ services) | — |
-| **JSON output** | ✓ | ✓ | ✓ |
-| **Install method** | Single file | Go/Docker | Go |
-| **Dependencies** | None (stdlib only) | 40+ modules | 20+ modules |
-| **Scan speed** | ~5k lines/s | ~1k lines/s | ~10k lines/s |
+| Feature | **Astra** | **Gitleaks** | **TruffleHog** | **SecretFinder** |
+|---|:---:|:---:|:---:|:---:|
+| **Pattern set** | 318 regex patterns | ~150 + custom TOML rules | Curated patterns + verification | Smaller JS-focused set |
+| **Live secret verification** | ❌ | ❌ | ✅ | ❌ |
+| **Entropy analysis** | ✅ (per-pattern thresholds) | ✅ | ✅ | Limited |
+| **Git history scanning** | ❌ | ✅ | ✅ | ❌ |
+| **Scans deleted commits** | ❌ | ✅ | ✅ | ❌ |
+| **Live URL / JS scanning** | ✅ | ❌ | ❌ | ✅ |
+| **Status-code aware fetching** | ✅ | ❌ | ❌ | ❌ |
+| **JS bundle focused** | ✅ | ❌ | ❌ | ✅ |
+| **JS recon findings** (endpoints, admin paths, source maps, internal IPs) | ✅ | ❌ | ❌ | ✅ |
+| **Primary target** | Live web assets | Git repositories | Git repositories | JavaScript files |
+| **Credential validation** | Pattern matching only | Pattern matching only | Real API verification | Pattern matching only |
+| **Rule maturity** | New, hand-tuned | Community-hardened | Community-hardened + actively maintained | Mature, JS-focused |
+| **False-positive tuning** | Early-stage | Mature | Mature | Mature |
+| **Best use case** | Pentest recon + JS secret hunting | Repository auditing | Verified secret detection | Client-side JS analysis |
 
 ---
 
