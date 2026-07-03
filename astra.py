@@ -7,7 +7,7 @@ Accurate HTTP status codes (HEAD+GET verified) · Rate limiting
 Smart false-positive filter (context-aware) · Thread-safe scanning
 """
 
-import sys, re, json, argparse, math, time
+import sys, re, json, argparse, math, time, shutil
 import urllib.request, urllib.error, ssl
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
@@ -27,6 +27,14 @@ BANNER = f"""{C.BOLD}{C.CY}
   / ___ \\ ___) || | |  _ <  / ___ \\
  /_/   \\_\\____/ |_| |_| \\_\\/_/   \\_\\
 {C.RST}{C.X}  secret & credential scanner v1.6{C.RST}"""
+
+def term_width(default: int = 100) -> int:
+    """Current terminal width, falling back to `default` when it can't be
+    determined (piped output, redirected stdout, non-interactive shells)."""
+    try:
+        return shutil.get_terminal_size(fallback=(default, 24)).columns
+    except Exception:
+        return default
 
 def entropy(s: str) -> float:
     if not s: return 0.0
@@ -512,7 +520,7 @@ class SecretScanner:
     def __init__(self, severity='possible', show_raw=False, verbose=False,
                  json_output=False, filter_tags=None, threads=20, timeout=30,
                  max_depth=1, follow_js=True, quiet=False, no_fp=False,
-                 rate_limit: float = 0, retries: int = 2):
+                 rate_limit: float = 0, retries: int = 2, context_width: int = 60):
         self.severity = severity
         self.show_raw = show_raw
         self.verbose = verbose
@@ -529,6 +537,12 @@ class SecretScanner:
         # used only for transient failures (timeouts, connection errors,
         # 429/500/502/503/504). Default 2 (so up to 3 attempts total).
         self.retries = max(0, retries)
+        # ── NEW: --context-width flag. Chars of surrounding text captured
+        # on each side of a matched secret, so you can see how it's used
+        # (e.g. `const password = "admin123"` vs a real config assignment)
+        # instead of just the bare value — makes false positives obvious
+        # at a glance. Default 60/side (was hardcoded to 25/side).
+        self.context_width = max(0, context_width)
 
         # ── FIX: thread-safe scanned-set + stats (was a bare, unlocked set) ──
         self._scanned_lock = threading.Lock()
@@ -730,7 +744,8 @@ class SecretScanner:
                                 continue
                             if ent_min and entropy(val) < ent_min:
                                 continue
-                            cs, ce = max(0, m.start() - 25), min(len(chunk), m.end() + 25)
+                            cw = self.context_width
+                            cs, ce = max(0, m.start() - cw), min(len(chunk), m.end() + cw)
                             ctx = chunk[cs:ce].strip()
                             if cs > 0: ctx = '…' + ctx
                             if ce < len(chunk): ctx += '…'
@@ -738,7 +753,11 @@ class SecretScanner:
                                 'url': url, 'line': ln, 'pattern': name,
                                 'severity': sev, 'tags': list(tags),
                                 'value': val if self.show_raw else val[:4] + '*' * (max(0, len(val) - 8)) + val[-4:],
-                                'context': ctx[:100], 'entropy': round(entropy(val), 2)
+                                # cap display length generously above the context
+                                # window itself (2x width + room for the secret +
+                                # ellipsis markers) so --context-width isn't
+                                # silently clipped back down by a fixed cap.
+                                'context': ctx[:cw * 2 + 160], 'entropy': round(entropy(val), 2)
                             })
                     except Exception:
                         # Previously a bare `except: pass` with zero record.
@@ -840,7 +859,15 @@ class SecretScanner:
     def _show_status(self, url: str, status: int):
         sc = self._status_color(status)
         sl = self._status_label(status)
-        print(f"{sc}  [{sl:>12}] {url[:70]}{C.RST}")
+        # ── FIX: was a hardcoded url[:70], which chopped long URLs even on
+        # wide terminals and wasted space on narrow ones. Now sized off the
+        # real terminal width each call, so the full URL shows whenever it
+        # fits and only gets truncated (with a marker) when it genuinely
+        # doesn't fit on the current line.
+        prefix = f"  [{sl:>12}] "
+        avail = max(20, term_width() - len(prefix) - 1)  # -1 leaves a column of headroom
+        shown = url if len(url) <= avail else url[:avail - 1] + '…'
+        print(f"{sc}{prefix}{shown}{C.RST}")
 
     def _show(self, url: str, findings: List[Dict], status: int):
         sc = {'confirmed': C.R, 'probable': C.Y, 'possible': C.B, 'info': C.CY}
@@ -854,7 +881,7 @@ class SecretScanner:
             tags = f" {C.X}[{','.join(f['tags'])}]{C.RST}" if f['tags'] else ""
             print(f"  {icon} {c}{C.BOLD}{f['pattern']}{C.RST}{tags}")
             print(f"    {C.X}L{f['line']:4} │{C.RST} {c}{f['value']}{C.RST}")
-            if f.get('context'): print(f"    {C.X}ctx │{C.RST} {f['context'][:90]}")
+            if f.get('context'): print(f"    {C.X}ctx │{C.RST} {f['context']}")
             print()
         print(f"{C.X}  ── {len(findings)} finding(s){C.RST}")
 
@@ -905,6 +932,7 @@ def main():
     parser.add_argument('--no-fp', action='store_true')
     parser.add_argument('--rate', type=float, default=0, help='Rate limit (req/sec, 0=unlimited)')
     parser.add_argument('--retries', type=int, default=2, help='Extra fetch attempts on transient failure (default: 2)')
+    parser.add_argument('--context-width', type=int, default=60, help='Chars of context shown around each secret, per side (default: 60)')
     parser.add_argument('-l', '--list', action='store_true')
     parser.add_argument('-h', '--help', action='store_true')
 
@@ -939,6 +967,7 @@ def main():
   --no-fp         Disable FP filter
   --rate          Rate limit (req/sec, 0=unlimited)
   --retries       Extra fetch attempts on transient failure (default: 2)
+  --context-width Chars of context around each secret, per side (default: 60)
   -l, --list      List patterns
   -h, --help      Show help
 """)
@@ -972,11 +1001,11 @@ def main():
         severity=args.severity, show_raw=args.show_raw, verbose=args.verbose,
         json_output=args.json, filter_tags=args.tags, threads=args.threads,
         timeout=args.timeout, max_depth=args.depth, follow_js=not args.no_follow,
-        quiet=args.quiet, no_fp=args.no_fp, rate_limit=args.rate, retries=args.retries
+        quiet=args.quiet, no_fp=args.no_fp, rate_limit=args.rate, retries=args.retries,
+        context_width=args.context_width
     )
     scanner.run(urls)
     sys.exit(1 if scanner.total > 0 else 0)
 
 if __name__ == '__main__':
     main()
-    
